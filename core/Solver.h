@@ -358,6 +358,8 @@ protected:
 
     unordered_map<string, MRef> createdMonomials;
     vec<vec<pair<MRef, int>>>      presenceLiterals;
+    vec<Lit>            toPropagate;
+    vec<ERef>           references;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.

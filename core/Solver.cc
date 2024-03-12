@@ -1356,8 +1356,8 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                     return er;
                 }
                 else if (value(lit) == l_Undef) {
-                    uncheckedEnqueue(lit, er);
-                    propagatingDot(lit);
+                    toPropagate.push(lit);
+                    references.push(er);
                 }
             }
         }
@@ -1368,8 +1368,8 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                 return er;
             }
             else if (value(lit) == l_Undef) {
-                uncheckedEnqueue(~lit, er);
-                propagatingDot(~lit);
+                toPropagate.push(~lit);
+                references.push(er);
             }
         }
     }
@@ -1399,8 +1399,18 @@ ERef Solver::propagate() {
     bool res;
     watchedLiterals.cleanAll();
     watchedMonomials.cleanAll();
-    for (; qhead < trail.size(); ) {
-        Lit p = trail[qhead++];
+    for (int a = 0; a < toPropagate.size(); ++a) {
+        Lit p = toPropagate[a];
+        // Check if the lieral was already satisfied or falsified
+        if (value(p) == l_True) {
+            continue;
+        }
+        else if (value(p) == l_False) {
+            return references[a];
+        }
+        uncheckedEnqueue(p, references[a]);
+        propagatingDot(p);
+        ++propagations;
         // Force falsified literals
         vec<pair<MRef, int>> &negated = presenceLiterals[toInt(~p)];
         vec<MRef> falsified;
@@ -1450,7 +1460,7 @@ ERef Solver::propagate() {
                 confl = updateWatchedMonomial(wm[k].cref, mr);
                 // Check if we have a conflit
                 if (confl != CRef_Undef) {
-                    for (; k < wm.size(); wm[k++] = wm[l++]);
+                    for (; k < wm.size(); wm[l++] = wm[k++]);
                     wm.shrink(k - l);
                     return confl;
                 }
@@ -1821,6 +1831,8 @@ lbool Solver::search(int nof_conflicts) {
 
         }
         CRef confl = propagate();
+        toPropagate.clear();
+        references.clear();
 
         if(confl != CRef_Undef) {
             conflictDot();
@@ -1840,7 +1852,7 @@ lbool Solver::search(int nof_conflicts) {
             conflictsRestarts++;
             if(conflicts % 5000 == 0 && var_decay < max_var_decay)
                 var_decay += 0.01;
-
+            
             if(verbosity >= 1 && starts>0 && conflicts % verbEveryConflicts == 0) {
                 printf("c | %8d   %7d    %5d | %7d %8d %8d | %5d %8d   %6d %8d | %6.3f %% |\n",
                        (int) starts, (int) stats[nbstopsrestarts], (int) (conflicts / starts),
@@ -1849,14 +1861,16 @@ lbool Solver::search(int nof_conflicts) {
             }
             if(decisionLevel() == 0) {
                 return l_False;
-
             }
+
+            /*
             if(adaptStrategies && conflicts == 100000) {
                 cancelUntil(0);
                 adaptSolver();
                 adaptStrategies = false;
                 return l_Undef;
             }
+            */
 
             trailQueue.push(trail.size());
             // BLOCK RESTART (CP 2012 paper)
@@ -1872,8 +1886,8 @@ lbool Solver::search(int nof_conflicts) {
 
             Lit last = trail[trail_lim.last()];
             cancelUntil(decisionLevel() - 1);
-            uncheckedEnqueue(~last, CRef_Undef);  
-            propagatingDot(~last);          
+            toPropagate.push(~last);
+            references.push(CRef_Undef);      
             
 
             /* Clause learning
@@ -2000,9 +2014,9 @@ lbool Solver::search(int nof_conflicts) {
             // Increase decision level and enqueue 'next'
             aDecisionWasMade = true;
             newDecisionLevel();
-            uncheckedEnqueue(next);
+            toPropagate.push(next);
+            references.push(CRef_Undef);
             assumingDot();
-            propagatingDot(next);
         }
     }
 }
