@@ -360,6 +360,10 @@ protected:
     vec<vec<pair<MRef, int>>>      presenceLiterals;
     vec<Lit>            toPropagate;
     vec<ERef>           references;
+    vec<bool>           present;
+    int                 current;
+    bool                useConflictAnalysis = false;
+    bool                makeDot = false;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
@@ -387,7 +391,7 @@ protected:
     vector<string> stack;
     bool skipDecisionDot;
     bool isRoot = true;
-    bool assertive = false;
+    int assertive = 0;
 
     // UPDATEVARACTIVITY trick (see competition'09 companion paper)
     vec<Lit> lastDecisionLevel;
@@ -449,7 +453,11 @@ protected:
     ERef     updateWatchedMonomial(ERef er, MRef mr); 
     lbool    getValueMonomial (MRef mr);
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
-    void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
+    // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
+    void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);
+    void     analyzeEquation  (ERef eq);
+    void     learnEquation    (vec<Lit> &out_learnt);
+    void     learnBinaryEquation(vec<Lit> &out_learnt);
     void     analyzeFinal     (Lit p, vec<Lit>& out_conflict);                         // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
     bool     litRedundant     (Lit p, uint32_t abstract_levels);                       // (helper method for 'analyze()')
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
@@ -471,6 +479,7 @@ protected:
     // Operations on clauses:
     //
     void     attachClause     (CRef cr);               // Attach a clause to watcher lists.
+    MRef     allocateMonomial (vec<Lit> &m, bool learnt, bool attach);
     void     attachMonomial   (MRef mr);               // Attach a monomial to watcher lists.
     void     attachEquation   (ERef er);               // Attach an equation to watcher lists.
     void     detachClause     (CRef cr, bool strict = false); // Detach a clause to watcher lists.

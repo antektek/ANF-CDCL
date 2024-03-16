@@ -411,9 +411,41 @@ Var Solver::newVar(bool sign, bool dvar) {
     decision.push();
     trail.capacity(v + 1);
     setDecisionVar(v, dvar);
-
+    present.push(false);
+    present.push(false);
 
     return v;
+}
+
+
+MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
+    string code("");
+    MRef mr;
+    code += to_string(toInt(m[0]));
+    for (int i = 1; i < m.size(); ++i) {
+        code += " " + to_string(toInt(m[i]));
+    }
+    if (createdMonomials.count(code)) {
+        // The monomial already exists
+        mr = createdMonomials[code];
+    } else {
+        // Create the new monomial
+        mr = ma.alloc(m, learnt);
+        watchedMonomials.init(mkLit(mr >> 1, false));
+        watchedMonomials.init(mkLit(mr >> 1, true));
+        createdMonomials[code] = mr;
+
+        // Update presence of literal
+        for (int i = 0; i < m.size(); ++i) {
+            presenceLiterals[toInt(m[i])].push(make_pair(mr, i));
+        }
+
+        // Create watched literals
+        if (attach) {
+            attachMonomial(mr);
+        }
+    }
+    return mr;
 }
 
 
@@ -435,30 +467,7 @@ bool Solver::addMonomial_(vec<Lit> &ps, vec<Lit> &equ) {
     ps.shrink(i - j);
 
     // Create the monomial if necessary
-    string code("");
-    MRef mr;
-    code += to_string(toInt(ps[0]));
-    for (int i = 1; i < ps.size(); ++i) {
-        code += " " + to_string(toInt(ps[i]));
-    }
-    if (createdMonomials.count(code)) {
-        // The monomial already exists
-        mr = createdMonomials[code];
-    } else {
-        // Create the new monomial
-        mr = ma.alloc(ps, false);
-        watchedMonomials.init(mkLit(mr >> 1, false));
-        watchedMonomials.init(mkLit(mr >> 1, true));
-        createdMonomials[code] = mr;
-
-        // Update presence of literal
-        for (i = 0; i < ps.size(); ++i) {
-            presenceLiterals[toInt(ps[i])].push(make_pair(mr, i));
-        }
-
-        // Create watched literals
-        attachMonomial(mr);
-    }
+    MRef mr = allocateMonomial(ps, false, true);
     equ.push(mkLit(mr >> 1, mr & 1));
     return true;
 }
@@ -703,8 +712,9 @@ void Solver::cancelUntil(int level) {
         for (; (int)stack.size() > level + 1; ) {
                 stack.pop_back();
         }
-        backtrackDot();
-        assertive = true;
+        if (makeDot) {
+            backtrackDot();
+        }
         for(int c = trail.size() - 1; c >= trail_lim[level]; c--) {
             Var x = var(trail[c]);
             assigns[x] = l_Undef;
@@ -738,17 +748,37 @@ void Solver::propagatingDot(Lit l)
     if (isRoot) {
         fprintf(dot, "\t\"%s\"[label=\"%s\"]\n", currentNodeName.c_str(), currentNodeName.c_str());
     }
-    if (vardata[abs(toInt(l)) >> 1].reason == CRef_Undef) {
-        color = ((assertive) ? ("orange") : ("blue"));  
-        weight = 1;
+    if (!useConflictAnalysis) {
+        if (vardata[abs(toInt(l)) >> 1].reason == CRef_Undef) {
+            if (assertive) {
+                color = "orange";
+                --assertive;
+            } else {
+                color = "blue";
+            }
+            weight = 1;
+        } else {
+            color = "green";
+            weight = 100;
+        }
     } else {
-        color = "green";
-        weight = 100;
+        if (vardata[abs(toInt(l)) >> 1].reason == CRef_Undef && decisionLevel() > 0) {
+            color = "blue";
+            weight = 1;
+        } else {
+            if (assertive) {
+                color = "orange";
+                --assertive;
+            } else {
+                color = "green";
+            }
+            weight = 100;
+        }
     }
     fprintf(dot, "\t\"%s\"[label=\"%d\",shape=point,color=black]\n", newName.c_str(), toLiteral(l));
     fprintf(dot, "\t\"%s\" -- \"%s\"[label=\"%d\",fontcolor=%s,color=%s,style=bold,weight=%d]\n", currentNodeName.c_str(), newName.c_str(), toLiteral(l), color.c_str(), color.c_str(), weight);
     currentNodeName = newName;
-    assertive = isRoot = false;
+    isRoot = false;
 }
 
 void Solver::conflictDot() {
@@ -838,6 +868,7 @@ Lit Solver::pickBranchLit() {
 |        rest of literals. There may be others from the same level though.
 |
 |________________________________________________________________________________________________@*/
+/* Glucose conflict analysis
 void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, int &out_btlevel, unsigned int &lbd, unsigned int &szWithoutSelectors) {
     int pathC = 0;
     Lit p = lit_Undef;
@@ -972,12 +1003,12 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
     //    stats[tot_literals]+=out_learnt.size();
 
 
-    /* ***************************************
-      Minimisation with binary clauses of the asserting clause
-      First of all : we look for small clauses
-      Then, we reduce clauses with small LBD.
-      Otherwise, this can be useless
-     */
+    // ***************************************
+    //Minimisation with binary clauses of the asserting clause
+    //First of all : we look for small clauses
+    //Then, we reduce clauses with small LBD.
+    //Otherwise, this can be useless
+    
     if(!incremental && out_learnt.size() <= lbSizeMinimizingClause) {
         minimisationWithBinaryResolution(out_learnt);
     }
@@ -1023,6 +1054,190 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 
     for(int j = 0; j < analyze_toclear.size(); j++) seen[var(analyze_toclear[j])] = 0; // ('seen[]' is now cleared)
     for(int j = 0; j < selectors.size(); j++) seen[var(selectors[j])] = 0;
+}
+*/
+
+void Solver::analyzeEquation(ERef eq) {
+    ERef mr;
+    lbool val;
+    int idx;
+    Lit lit;
+    for (int i = 0; i < ea[eq].size(); ++i) {
+        mr = toInt(ea[eq][i]);
+        val = getValueMonomial(mr);
+        assert(val != l_Undef);
+        if (val == l_False) {
+            idx = ma[mr].getWatch1();
+            if (assigns[var(ma[mr][idx])] == l_False) {
+                lit = mkLit(var(ma[mr][idx]), false);
+            } else {
+                lit = mkLit(var(ma[mr][idx]), true);
+            }
+            if (!present[toInt(lit)]) {
+                present[toInt(lit)] = true;
+                if (level(var(ma[mr][idx])) == decisionLevel()) {
+                    ++current;
+                }
+            }
+        } else {
+            for (int j = 0; j < ma[mr].size(); ++j) {
+                if (assigns[var(ma[mr][j])] == l_False) {
+                    lit = mkLit(var(ma[mr][j]), false);
+                } else {
+                    lit = mkLit(var(ma[mr][j]), true);
+                }
+                if (!present[toInt(lit)]) {
+                    present[toInt(lit)] = true;
+                    if (level(var(ma[mr][j])) == decisionLevel()) {
+                        ++current;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel) {
+    ERef prev = CRef_Undef;
+    Lit p;
+    current = 0;
+    out_btlevel = 0;
+    analyzeEquation(confl);
+    for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
+        p = trail[i];
+        if (present[toInt(~p)] && reason(var(p)) != CRef_Undef) {
+            if (reason(var(p)) != prev) {
+                prev = reason(var(p));
+                analyzeEquation(prev);
+            }
+            present[toInt(~p)] = false;
+            if (level(var(p)) == decisionLevel()) {
+                --current;
+            }
+        }
+    }
+    out_learnt.push();
+    for (int i = 0; i < present.size(); ++i) {
+        if (present[i]) {
+            if (level(i >> 1) > 0) {
+                if (level(i >> 1) == decisionLevel()) {
+                    out_learnt[0] = mkLit(i >> 1, i & 1);
+                } else {
+                    out_learnt.push(mkLit(i >> 1, i & 1));
+                    if (level(i >> 1) > out_btlevel) {
+                        out_btlevel = level(i >> 1);
+                    }
+                }
+            }
+            present[i] = false;
+        }
+    }
+}
+
+
+void Solver::learnEquation(vec<Lit> &out_learnt) {
+    vec<Lit> eq1, eq2, mon;
+    MRef mr;
+    ERef er1, er2;
+    Var v;
+
+    mon.push(out_learnt[0]);
+    mr = allocateMonomial(mon, true, true);
+    eq1.push(mkLit(mr >> 1, mr & 1));
+
+    v = newVar();
+    mon.clear();
+    mon.push(mkLit(v, false));
+    mr = allocateMonomial(mon, true, true);
+    eq1.push(mkLit(mr >> 1, mr & 1));
+    eq2.push(mkLit(mr >> 1, mr & 1));
+
+    mon.clear();
+    mon.push(out_learnt[0]);
+    mon.push(mkLit(v, false));
+    mr = allocateMonomial(mon, true, true);
+    eq1.push(mkLit(mr >> 1, mr & 1));
+
+    mon.clear();
+    int maxi = 0, idx = -1;
+    for(int i = 1; i < out_learnt.size(); ++i) {
+        mon.push(~out_learnt[i]);
+        if (level(var(mon.last())) > maxi) {
+            maxi = level(var(mon.last()));
+            idx = i - 1;
+        }
+    }
+    mr = allocateMonomial(mon, true, false);
+    watchedLiterals[mon[idx]].push(Watcher(mr, mon[idx]));
+    ma[mr].setWatches(idx);
+    eq2.push(mkLit(mr >> 1, mr & 1));
+
+    er1 = ea.alloc(eq1, true);
+    learnts.push(er1);
+    attachEquation(er1);
+
+    er2 = ea.alloc(eq2, true);
+    learnts.push(er2);
+    attachEquation(er2);
+
+    toPropagate.push(mkLit(v, true));
+    toPropagate.push(out_learnt[0]);
+
+    references.push(er2);
+    references.push(er1);
+}
+
+
+void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
+    vec<Lit> eq, mon;
+    MRef mr;
+    ERef er;
+    
+    mon.push(out_learnt[0]);
+    mr = allocateMonomial(mon, true, true);
+    eq.push(mkLit(mr >> 1, mr & 1));
+
+    mon.clear();
+    mon.push(out_learnt[1]);
+    mr = allocateMonomial(mon, true, true);
+    eq.push(mkLit(mr >> 1, mr & 1));
+
+    mon.clear();
+    if (toInt(out_learnt[0]) < toInt(out_learnt[1])) {
+        mon.push(out_learnt[0]);
+        mon.push(out_learnt[1]);
+    } else {
+        mon.push(out_learnt[1]);
+        mon.push(out_learnt[0]);
+    }
+    string code = to_string(toInt(mon[0])) + " " + to_string(toInt(mon[1]));
+    if (createdMonomials.count(code)) {
+        mr = createdMonomials[code];
+    } else {
+        mr = ma.alloc(mon, true);
+        watchedMonomials.init(mkLit(mr >> 1, false));
+        watchedMonomials.init(mkLit(mr >> 1, true));
+        createdMonomials[code] = mr;
+        presenceLiterals[toInt(mon[0])].push(make_pair(mr, 0));
+        presenceLiterals[toInt(mon[1])].push(make_pair(mr, 1));
+        if (level(var(mon[0])) < level(var(mon[1]))) {
+            printf("coucou 1\n");
+            watchedLiterals[mon[0]].push(Watcher(mr, mon[0]));
+            ma[mr].setWatches(0);
+        } else {
+            printf("coucou 2\n");
+            watchedLiterals[mon[1]].push(Watcher(mr, mon[1]));
+            ma[mr].setWatches(1);
+        }
+    }
+    eq.push(mkLit(mr >> 1, mr & 1));
+
+    er = ea.alloc(eq, true);
+    learnts.push(er);
+    attachEquation(er);
+
+    toPropagate.push(out_learnt[0]);
+    references.push(er);
 }
 
 
@@ -1396,7 +1611,6 @@ ERef Solver::propagate() {
     int i, j, k, l;
     MRef mr;
     ERef confl = CRef_Undef;
-    bool res;
     watchedLiterals.cleanAll();
     watchedMonomials.cleanAll();
     for (int a = 0; a < toPropagate.size(); ++a) {
@@ -1409,7 +1623,9 @@ ERef Solver::propagate() {
             return references[a];
         }
         uncheckedEnqueue(p, references[a]);
-        propagatingDot(p);
+        if (makeDot) {
+            propagatingDot(p);
+        }
         ++propagations;
         // Force falsified literals
         vec<pair<MRef, int>> &negated = presenceLiterals[toInt(~p)];
@@ -1803,8 +2019,8 @@ lbool Solver::search(int nof_conflicts) {
     int backtrack_level;
     int conflictC = 0;
     vec <Lit> learnt_clause, selectors;
-    unsigned int nblevels, szWithoutSelectors = 0;
-    bool blocked = false;
+    // unsigned int nblevels, szWithoutSelectors = 0;
+    // bool blocked = false;
     bool aDecisionWasMade = false;
 
     starts++;
@@ -1834,8 +2050,10 @@ lbool Solver::search(int nof_conflicts) {
         toPropagate.clear();
         references.clear();
 
-        if(confl != CRef_Undef) {
-            conflictDot();
+        if(confl != CRef_Undef) {        
+            if (makeDot) {    
+                conflictDot();
+            }
             newDescent = false;
             if(parallelJobIsFinished())
                 return l_Undef;
@@ -1850,6 +2068,7 @@ lbool Solver::search(int nof_conflicts) {
             conflicts++;
             conflictC++;
             conflictsRestarts++;
+            
             if(conflicts % 5000 == 0 && var_decay < max_var_decay)
                 var_decay += 0.01;
             
@@ -1871,7 +2090,7 @@ lbool Solver::search(int nof_conflicts) {
                 return l_Undef;
             }
             */
-
+            /*
             trailQueue.push(trail.size());
             // BLOCK RESTART (CP 2012 paper)
             if(conflictsRestarts > LOWER_BOUND_FOR_BLOCKING_RESTART && lbdQueue.isvalid() && trail.size() > R * trailQueue.getavg()) {
@@ -1883,11 +2102,44 @@ lbool Solver::search(int nof_conflicts) {
                     blocked = true;
                 }
             }
+            */
 
-            Lit last = trail[trail_lim.last()];
-            cancelUntil(decisionLevel() - 1);
-            toPropagate.push(~last);
-            references.push(CRef_Undef);      
+            if (!useConflictAnalysis) {
+                Lit last = trail[trail_lim.last()];
+                if (makeDot) {
+                    assertive = 1;
+                }
+                cancelUntil(decisionLevel() - 1);
+                toPropagate.push(~last);
+                references.push(CRef_Undef);
+            } else {
+                learnt_clause.clear();
+                analyzeConflict(confl, learnt_clause, backtrack_level);
+                stats[sumSizes]+= learnt_clause.size();
+
+                if (learnt_clause.size() == 1) {
+                    ++stats[nbUn];
+                    toPropagate.push(learnt_clause[0]);
+                    references.push(CRef_Undef);
+                    if (makeDot) {
+                        assertive = 1;
+                    }
+                }
+                else if (learnt_clause.size() == 2) {
+                    ++stats[nbBin];
+                    learnBinaryEquation(learnt_clause);
+                    if (makeDot) {
+                        assertive = 1;
+                    }
+                } else {
+                    learnEquation(learnt_clause);
+                    if (makeDot) {
+                        assertive = 2;
+                    }
+                }
+
+                cancelUntil(backtrack_level);
+            }
             
 
             /* Clause learning
@@ -1964,11 +2216,13 @@ lbool Solver::search(int nof_conflicts) {
                 return l_Undef;
             }
             */
-
+            /*/
             // Simplify the set of problem clauses:
             if(decisionLevel() == 0 && !simplify()) {
                 return l_False;
             }
+            */
+            /*
             // Perform clause database reduction !
             if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
                (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
@@ -1981,6 +2235,7 @@ lbool Solver::search(int nof_conflicts) {
                         nbclausesbeforereduce += incReduceDB;
                 }
             }
+            */
 
             lastLearntClause = CRef_Undef;
             Lit next = lit_Undef;
@@ -2006,7 +2261,9 @@ lbool Solver::search(int nof_conflicts) {
                 if(next == lit_Undef) {
                     printf("c last restart ## conflicts  :  %d %d \n", conflictC, decisionLevel());
                     // Model found:
-                    solutionDot();
+                    if (makeDot) {
+                        solutionDot();
+                    }
                     return l_True;
                 }
             }
@@ -2016,7 +2273,9 @@ lbool Solver::search(int nof_conflicts) {
             newDecisionLevel();
             toPropagate.push(next);
             references.push(CRef_Undef);
-            assumingDot();
+            if (makeDot) {
+                assumingDot();
+            }
         }
     }
 }
@@ -2147,8 +2406,10 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     // Search:
     int curr_restarts = 0;
-    dot = fopen("graph.dot", "w");
-    fprintf(dot, "graph G {\n\tordering=out\n");
+    if (makeDot) {
+        dot = fopen("graph.dot", "w");
+        fprintf(dot, "graph G {\n\tordering=out\n");
+    }
     
     while(status == l_Undef) {
         skipDecisionDot = false;
@@ -2159,7 +2420,7 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
         if(!withinBudget()) break;
         curr_restarts++;
-        if (status == l_Undef) {
+        if (makeDot && status == l_Undef) {
             currentNodeName = string("R") + to_string(starts);
         }
     }
@@ -2190,7 +2451,9 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
 
     cancelUntil(0);
-    fprintf(dot, "}\n");
+    if (makeDot) {
+        fprintf(dot, "}\n");
+    }
 
     double finalTime = cpuTime();
     if(status == l_True) {
