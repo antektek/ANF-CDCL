@@ -1062,10 +1062,12 @@ void Solver::analyzeEquation(ERef eq) {
     lbool val;
     int idx;
     Lit lit;
+    // Consider each monomial in the equation
     for (int i = 0; i < ea[eq].size(); ++i) {
         mr = toInt(ea[eq][i]);
         val = getValueMonomial(mr);
         assert(val != l_Undef);
+        // If the monomial is satisfied, we have to consider all the literals appaering in it
         if (val == l_False) {
             idx = ma[mr].getWatch1();
             if (assigns[var(ma[mr][idx])] == l_False) {
@@ -1079,6 +1081,7 @@ void Solver::analyzeEquation(ERef eq) {
                     ++current;
                 }
             }
+        // If the monomial is falsified, we only consider the watched literal
         } else {
             for (int j = 0; j < ma[mr].size(); ++j) {
                 if (assigns[var(ma[mr][j])] == l_False) {
@@ -1102,20 +1105,25 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     Lit p;
     current = 0;
     out_btlevel = 0;
+    // Consider the conflict
     analyzeEquation(confl);
+    // Get back in the trail and consider the reasons
     for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
         p = trail[i];
         if (present[toInt(~p)] && reason(var(p)) != CRef_Undef) {
+            // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
                 analyzeEquation(prev);
             }
+            // Remove the literal
             present[toInt(~p)] = false;
             if (level(var(p)) == decisionLevel()) {
                 --current;
             }
         }
     }
+    // Get the literals still present
     out_learnt.push();
     for (int i = 0; i < present.size(); ++i) {
         if (present[i]) {
@@ -1136,15 +1144,18 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
 
 
 void Solver::learnEquation(vec<Lit> &out_learnt) {
+    // Learn equations a + z + az and z + -B
     vec<Lit> eq1, eq2, mon;
     MRef mr;
     ERef er1, er2;
     Var v;
-
+    
+    // a
     mon.push(out_learnt[0]);
     mr = allocateMonomial(mon, true, true);
     eq1.push(mkLit(mr >> 1, mr & 1));
 
+    // z
     v = newVar();
     mon.clear();
     mon.push(mkLit(v, false));
@@ -1152,13 +1163,16 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     eq1.push(mkLit(mr >> 1, mr & 1));
     eq2.push(mkLit(mr >> 1, mr & 1));
 
+    // az
     mon.clear();
     mon.push(out_learnt[0]);
     mon.push(mkLit(v, false));
     mr = allocateMonomial(mon, true, true);
     eq1.push(mkLit(mr >> 1, mr & 1));
 
+    // -B
     mon.clear();
+    // Place the watched literal
     int maxi = 0, idx = -1;
     for(int i = 1; i < out_learnt.size(); ++i) {
         mon.push(~out_learnt[i]);
@@ -1167,11 +1181,13 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
             idx = i - 1;
         }
     }
+    // Create the monomial
     mr = allocateMonomial(mon, true, false);
     watchedLiterals[mon[idx]].push(Watcher(mr, mon[idx]));
     ma[mr].setWatches(idx);
     eq2.push(mkLit(mr >> 1, mr & 1));
 
+    // Learn the equations
     er1 = ea.alloc(eq1, true);
     learnts.push(er1);
     attachEquation(er1);
@@ -1180,6 +1196,7 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     learnts.push(er2);
     attachEquation(er2);
 
+    // Propagations
     toPropagate.push(mkLit(v, true));
     toPropagate.push(out_learnt[0]);
 
@@ -1189,20 +1206,25 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
 
 
 void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
+    // Learn equation a + b + ab
     vec<Lit> eq, mon;
     MRef mr;
     ERef er;
     
+    // a
     mon.push(out_learnt[0]);
     mr = allocateMonomial(mon, true, true);
     eq.push(mkLit(mr >> 1, mr & 1));
 
+    // b
     mon.clear();
     mon.push(out_learnt[1]);
     mr = allocateMonomial(mon, true, true);
     eq.push(mkLit(mr >> 1, mr & 1));
 
+    // ab
     mon.clear();
+    // Place the watched literal
     if (toInt(out_learnt[0]) < toInt(out_learnt[1])) {
         mon.push(out_learnt[0]);
         mon.push(out_learnt[1]);
@@ -1210,6 +1232,7 @@ void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
         mon.push(out_learnt[1]);
         mon.push(out_learnt[0]);
     }
+    // Create the monomial
     string code = to_string(toInt(mon[0])) + " " + to_string(toInt(mon[1]));
     if (createdMonomials.count(code)) {
         mr = createdMonomials[code];
@@ -1221,21 +1244,21 @@ void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
         presenceLiterals[toInt(mon[0])].push(make_pair(mr, 0));
         presenceLiterals[toInt(mon[1])].push(make_pair(mr, 1));
         if (level(var(mon[0])) < level(var(mon[1]))) {
-            printf("coucou 1\n");
             watchedLiterals[mon[0]].push(Watcher(mr, mon[0]));
             ma[mr].setWatches(0);
         } else {
-            printf("coucou 2\n");
             watchedLiterals[mon[1]].push(Watcher(mr, mon[1]));
             ma[mr].setWatches(1);
         }
     }
     eq.push(mkLit(mr >> 1, mr & 1));
 
+    // Learn the equation
     er = ea.alloc(eq, true);
     learnts.push(er);
     attachEquation(er);
 
+    // Propagations
     toPropagate.push(out_learnt[0]);
     references.push(er);
 }
@@ -2105,6 +2128,7 @@ lbool Solver::search(int nof_conflicts) {
             */
 
             if (!useConflictAnalysis) {
+                // Flip the last decision
                 Lit last = trail[trail_lim.last()];
                 if (makeDot) {
                     assertive = 1;
@@ -2113,11 +2137,13 @@ lbool Solver::search(int nof_conflicts) {
                 toPropagate.push(~last);
                 references.push(CRef_Undef);
             } else {
+                // Perform conflict analysis
                 learnt_clause.clear();
                 analyzeConflict(confl, learnt_clause, backtrack_level);
                 stats[sumSizes]+= learnt_clause.size();
 
                 if (learnt_clause.size() == 1) {
+                    // Unary equation
                     ++stats[nbUn];
                     toPropagate.push(learnt_clause[0]);
                     references.push(CRef_Undef);
@@ -2126,12 +2152,14 @@ lbool Solver::search(int nof_conflicts) {
                     }
                 }
                 else if (learnt_clause.size() == 2) {
+                    // Binary equation
                     ++stats[nbBin];
                     learnBinaryEquation(learnt_clause);
                     if (makeDot) {
                         assertive = 1;
                     }
                 } else {
+                    // Equation of size > 2
                     learnEquation(learnt_clause);
                     if (makeDot) {
                         assertive = 2;
