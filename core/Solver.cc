@@ -428,6 +428,7 @@ MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
     if (createdMonomials.count(code)) {
         // The monomial already exists
         mr = createdMonomials[code];
+        newMonomial = false;
     } else {
         // Create the new monomial
         mr = ma.alloc(m, learnt);
@@ -547,16 +548,14 @@ bool Solver::addClause_(vec <Lit> &ps) {
 }
 
 
-void Solver::attachMonomial(MRef mr) {
-    const Clause &c = ma[mr];
-    watchedLiterals[c[0]].push(Watcher(mr, c[0]));
+inline void Solver::attachMonomial(MRef mr) {
+    watchedLiterals[ma[mr][0]].push(Watcher(mr, ma[mr][0]));
 }
 
 
 void Solver::attachEquation(ERef er) {
-    const Clause &c = ea[er];
-    watchedMonomials[c[0]].push(Watcher(er, c[1]));
-    watchedMonomials[c[1]].push(Watcher(er, c[0]));
+    watchedMonomials[ea[er][0]].push(Watcher(er, ea[er][1]));
+    watchedMonomials[ea[er][1]].push(Watcher(er, ea[er][0]));
 }
 
 
@@ -709,10 +708,10 @@ void Solver::minimisationWithBinaryResolution(vec <Lit> &out_learnt) {
 
 void Solver::cancelUntil(int level) {
     if(decisionLevel() > level) {
-        for (; (int)stack.size() > level + 1; ) {
-                stack.pop_back();
-        }
         if (makeDot) {
+            for (; (int)stack.size() > level + 1; ) {
+                    stack.pop_back();
+            }
             backtrackDot();
         }
         for(int c = trail.size() - 1; c >= trail_lim[level]; c--) {
@@ -1058,7 +1057,7 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 */
 
 void Solver::analyzeEquation(ERef eq) {
-    ERef mr;
+    MRef mr;
     lbool val;
     int idx;
     Lit lit;
@@ -1066,7 +1065,6 @@ void Solver::analyzeEquation(ERef eq) {
     for (int i = 0; i < ea[eq].size(); ++i) {
         mr = toInt(ea[eq][i]);
         val = getValueMonomial(mr);
-        assert(val != l_Undef);
         // If the monomial is satisfied, we have to consider all the literals appaering in it
         if (val == l_False) {
             idx = ma[mr].getWatch1();
@@ -1084,15 +1082,17 @@ void Solver::analyzeEquation(ERef eq) {
         // If the monomial is falsified, we only consider the watched literal
         } else {
             for (int j = 0; j < ma[mr].size(); ++j) {
-                if (assigns[var(ma[mr][j])] == l_False) {
-                    lit = mkLit(var(ma[mr][j]), false);
-                } else {
-                    lit = mkLit(var(ma[mr][j]), true);
-                }
-                if (!present[toInt(lit)]) {
-                    present[toInt(lit)] = true;
-                    if (level(var(ma[mr][j])) == decisionLevel()) {
-                        ++current;
+                if (value(ma[mr][j]) != l_Undef) {
+                    if (assigns[var(ma[mr][j])] == l_False) {
+                        lit = mkLit(var(ma[mr][j]), false);
+                    } else {
+                        lit = mkLit(var(ma[mr][j]), true);
+                    }
+                    if (!present[toInt(lit)]) {
+                        present[toInt(lit)] = true;
+                        if (level(var(ma[mr][j])) == decisionLevel()) {
+                            ++current;
+                        }
                     }
                 }
             }
@@ -1110,7 +1110,10 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     // Get back in the trail and consider the reasons
     for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
         p = trail[i];
-        if (present[toInt(~p)] && reason(var(p)) != CRef_Undef) {
+        if (reason(var(p)) == CRef_Undef) {
+            break;
+        }
+        if (present[toInt(~p)]) {
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
@@ -1123,6 +1126,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
             }
         }
     }
+
     // Get the literals still present
     out_learnt.push();
     for (int i = 0; i < present.size(); ++i) {
@@ -1182,9 +1186,12 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
         }
     }
     // Create the monomial
+    newMonomial = true;
     mr = allocateMonomial(mon, true, false);
-    watchedLiterals[mon[idx]].push(Watcher(mr, mon[idx]));
-    ma[mr].setWatches(idx);
+    if (newMonomial) {
+        watchedLiterals[mon[idx]].push(Watcher(mr, mon[idx]));
+        ma[mr].setWatches(idx);
+    }
     eq2.push(mkLit(mr >> 1, mr & 1));
 
     // Learn the equations
@@ -1501,11 +1508,10 @@ CRef Solver::propagate() {
 
 void Solver::forceWatchedLiteral(MRef mr, Lit lit, int idx) {
     Clause &m = ma[mr];
-    int prev = m.getWatch1();
     // Change only if we do not already watch a falsified literal
-    if (value(m[prev]) == l_Undef) {
+    if (value(m[m.getWatch1()]) == l_Undef) {
         // Remove mr from the list of the previous watched literal
-        vec<Watcher> &ws = watchedLiterals[m[prev]];
+        vec<Watcher> &ws = watchedLiterals[m[m.getWatch1()]];
         for (int i = 0; i < ws.size(); ++i) {
             if (ws[i].cref == mr) {
                 ws[i] = ws.last();
@@ -1552,7 +1558,7 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
     }
     
     // Look for a replacement monomial and count the satisfied monomials
-    bool odd = false;
+    odd = false;
     for (int i = 0; i < e.size(); ++i) {
         if (i != w1 && i != w2) {
             val = getValueMonomial(toInt(e[i]));
@@ -1562,25 +1568,16 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                 changed = true;
                 return CRef_Undef;
             }
-            if (val == l_True) {
-                odd = !odd;
-            }
+            odd ^= (val == l_True);
         }
     }
     changed = false;
     // Consider the value of the watched monomial and the constante
-    if (getValueMonomial(mr) == l_True) {
-        odd = !odd;
-    }
-    if (e.constante()) {
-        odd = !odd;
-    }
+    odd ^= ((getValueMonomial(mr) == l_True) ^ e.constante());
     val = getValueMonomial(toInt(e[w2]));
     // If the other watched monomial is affected, we check if we have a conflict
     if (val != l_Undef) {
-        if (val == l_True) {
-            odd = !odd;
-        }
+        odd ^= (val == l_True);
         if (!odd) {
             return er;
         }
@@ -1600,14 +1597,25 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             }
         }
         // If it has to be falsified, we can only propagate a monomial with a unique literal
-        else if (ma[toInt(e[w2])].size() == 1) {
-            lit = ma[toInt(e[w2])][0];
-            if (value(lit) == l_True) {
-                return er;
+        else {
+            MRef mr = toInt(e[w2]);
+            isUnit = true;
+            int w = ma[mr].getWatch1();
+            for (int i = 0; i < ma[mr].size(); ++i) {
+                if (i != w && value(ma[mr][i]) == l_Undef) {
+                    isUnit = false;
+                    break;
+                }
             }
-            else if (value(lit) == l_Undef) {
-                toPropagate.push(~lit);
-                references.push(er);
+            if (isUnit) {
+                lit = ma[mr][w];
+                if (value(lit) == l_True) {
+                    return er;
+                }
+                else if (value(lit) == l_Undef) {
+                    toPropagate.push(~lit);
+                    references.push(er);
+                }
             }
         }
     }
@@ -1628,16 +1636,20 @@ void Solver::printEquation(ERef er) {
     for (int i = 0; i < e.size(); ++i) {
         printMonomial(toInt(e[i]));
     }
+    if (e.constante()) {
+        printf(" T");
+    }
 }
 
 ERef Solver::propagate() {
     int i, j, k, l;
     MRef mr;
     ERef confl = CRef_Undef;
+    Lit p;
     watchedLiterals.cleanAll();
     watchedMonomials.cleanAll();
     for (int a = 0; a < toPropagate.size(); ++a) {
-        Lit p = toPropagate[a];
+        p = toPropagate[a];
         // Check if the lieral was already satisfied or falsified
         if (value(p) == l_True) {
             continue;
@@ -1652,15 +1664,15 @@ ERef Solver::propagate() {
         ++propagations;
         // Force falsified literals
         vec<pair<MRef, int>> &negated = presenceLiterals[toInt(~p)];
-        vec<MRef> falsified;
+        affected.clear();
         for (i = 0; i < negated.size(); ++i) {
             mr = negated[i].first;
             forceWatchedLiteral(mr, p, negated[i].second);
-            falsified.push(mr);
+            affected.push(mr);
         }
         // Update falsified monomials
-        for (int i = 0; i < falsified.size(); ++i) {
-            mr = falsified[i];
+        for (int i = 0; i < affected.size(); ++i) {
+            mr = affected[i];
             vec<Watcher> &ws = watchedMonomials[mkLit(mr >> 1, mr & 1)];
             for (j = k = 0; j < ws.size(); ++j) {
                 confl = updateWatchedMonomial(ws[j].cref, mr);
@@ -1680,20 +1692,20 @@ ERef Solver::propagate() {
         
         // Update satisfied watched literals
         vec<Watcher> &wl = watchedLiterals[p];
-        vec<MRef> satisfied;
+        affected.clear();
         for (i = j = 0; i < wl.size(); ++i) {
             mr = wl[i].cref;
             // If the monomial is affected, we have to propagate it
             if (updateWatchedLiteral(mr, p)) {
-                satisfied.push(mr);
+                affected.push(mr);
                 wl[j++] = wl[i];
             }
         }
         wl.shrink(i - j);
 
         // Update satisfied monomials
-        for (int i = 0; i < satisfied.size(); ++i) {
-            mr = satisfied[i];
+        for (int i = 0; i < affected.size(); ++i) {
+            mr = affected[i];
             vec<Watcher> &wm = watchedMonomials[mkLit(mr >> 1, mr & 1)];
             for (k = l = 0; k < wm.size(); ++k) {
                 confl = updateWatchedMonomial(wm[k].cref, mr);
@@ -2073,10 +2085,11 @@ lbool Solver::search(int nof_conflicts) {
         toPropagate.clear();
         references.clear();
 
-        if(confl != CRef_Undef) {        
+        if(confl != CRef_Undef) {
             if (makeDot) {    
                 conflictDot();
             }
+
             newDescent = false;
             if(parallelJobIsFinished())
                 return l_Undef;
@@ -2150,6 +2163,7 @@ lbool Solver::search(int nof_conflicts) {
                     if (makeDot) {
                         assertive = 1;
                     }
+                    cancelUntil(backtrack_level);
                 }
                 else if (learnt_clause.size() == 2) {
                     // Binary equation
@@ -2158,15 +2172,16 @@ lbool Solver::search(int nof_conflicts) {
                     if (makeDot) {
                         assertive = 1;
                     }
-                } else {
+                    cancelUntil(backtrack_level);
+                } 
+                else {
                     // Equation of size > 2
                     learnEquation(learnt_clause);
                     if (makeDot) {
                         assertive = 2;
                     }
-                }
-
-                cancelUntil(backtrack_level);
+                    cancelUntil(backtrack_level);
+                } 
             }
             
 
@@ -2287,6 +2302,15 @@ lbool Solver::search(int nof_conflicts) {
                 decisions++;
                 next = pickBranchLit();
                 if(next == lit_Undef) {
+                    printf("s ");
+                    for (Var v = 0; v < init_var; ++v) {
+                        if (value(v) == l_False) {
+                            printf("0");
+                        } else {
+                            printf("1");
+                        }
+                    }
+                    printf("\n");
                     printf("c last restart ## conflicts  :  %d %d \n", conflictC, decisionLevel());
                     // Model found:
                     if (makeDot) {
@@ -2391,6 +2415,7 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     model.clear();
     conflict.clear();
+    init_var = nVars();
     if(!ok) return l_False;
     double curTime = cpuTime();
 

@@ -360,10 +360,16 @@ protected:
     vec<vec<pair<MRef, int>>>      presenceLiterals;
     vec<Lit>            toPropagate;
     vec<ERef>           references;
+    vec<MRef>           affected;
     vec<bool>           present;
+    int                 init_var;
+    bool                newMonomial;
+    bool                odd;
     int                 current;
+    bool                isUnit;
     bool                useConflictAnalysis = false;
     bool                makeDot = false;
+    int                 maxSizeLearning = 6;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
@@ -480,7 +486,7 @@ protected:
     //
     void     attachClause     (CRef cr);               // Attach a clause to watcher lists.
     MRef     allocateMonomial (vec<Lit> &m, bool learnt, bool attach);
-    void     attachMonomial   (MRef mr);               // Attach a monomial to watcher lists.
+    inline void     attachMonomial   (MRef mr);               // Attach a monomial to watcher lists.
     void     attachEquation   (ERef er);               // Attach an equation to watcher lists.
     void     detachClause     (CRef cr, bool strict = false); // Detach a clause to watcher lists.
     void     detachClausePurgatory(CRef cr, bool strict = false);
