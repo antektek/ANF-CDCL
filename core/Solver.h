@@ -367,7 +367,7 @@ protected:
     bool                odd;
     int                 current;
     bool                isUnit;
-    bool                useConflictAnalysis = false;
+    bool                useConflictAnalysis = true;
     bool                makeDot = false;
     int                 maxSizeLearning = 6;
 
@@ -461,7 +461,7 @@ protected:
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
     void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);
-    void     analyzeEquation  (ERef eq);
+    void     analyzeEquation  (ERef eq, Lit p);
     void     learnEquation    (vec<Lit> &out_learnt);
     void     learnBinaryEquation(vec<Lit> &out_learnt);
     void     analyzeFinal     (Lit p, vec<Lit>& out_conflict);                         // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?

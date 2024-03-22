@@ -1056,7 +1056,7 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 }
 */
 
-void Solver::analyzeEquation(ERef eq) {
+void Solver::analyzeEquation(ERef eq, Lit p) {
     MRef mr;
     lbool val;
     int idx;
@@ -1065,7 +1065,7 @@ void Solver::analyzeEquation(ERef eq) {
     for (int i = 0; i < ea[eq].size(); ++i) {
         mr = toInt(ea[eq][i]);
         val = getValueMonomial(mr);
-        // If the monomial is satisfied, we have to consider all the literals appaering in it
+        // If the monomial is falsified, we only consider the watched literal
         if (val == l_False) {
             idx = ma[mr].getWatch1();
             if (assigns[var(ma[mr][idx])] == l_False) {
@@ -1079,19 +1079,30 @@ void Solver::analyzeEquation(ERef eq) {
                     ++current;
                 }
             }
-        // If the monomial is falsified, we only consider the watched literal
+        // If the monomial is satisfied, we have to consider all the literals appaering in it
         } else {
-            for (int j = 0; j < ma[mr].size(); ++j) {
-                if (value(ma[mr][j]) != l_Undef) {
-                    if (assigns[var(ma[mr][j])] == l_False) {
-                        lit = mkLit(var(ma[mr][j]), false);
-                    } else {
-                        lit = mkLit(var(ma[mr][j]), true);
+            bool consider = true;
+            if (p != lit_Undef) {
+                for (int j = 0; j < ma[mr].size(); ++j) {
+                    if (var(p) == var(ma[mr][j])) {
+                        consider = false;
+                        break;
                     }
-                    if (!present[toInt(lit)]) {
-                        present[toInt(lit)] = true;
-                        if (level(var(ma[mr][j])) == decisionLevel()) {
-                            ++current;
+                }
+            }
+            if (consider) {
+                for (int j = 0; j < ma[mr].size(); ++j) {
+                    if (value(ma[mr][j]) != l_Undef) {
+                        if (assigns[var(ma[mr][j])] == l_False) {
+                            lit = mkLit(var(ma[mr][j]), false);
+                        } else {
+                            lit = mkLit(var(ma[mr][j]), true);
+                        }
+                        if (!present[toInt(lit)]) {
+                            present[toInt(lit)] = true;
+                            if (level(var(ma[mr][j])) == decisionLevel()) {
+                                ++current;
+                            }
                         }
                     }
                 }
@@ -1106,7 +1117,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     current = 0;
     out_btlevel = 0;
     // Consider the conflict
-    analyzeEquation(confl);
+    analyzeEquation(confl, lit_Undef);
     // Get back in the trail and consider the reasons
     for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
         p = trail[i];
@@ -1117,7 +1128,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
-                analyzeEquation(prev);
+                analyzeEquation(prev, p);
             }
             // Remove the literal
             present[toInt(~p)] = false;
@@ -1557,8 +1568,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
         w2 = e.getWatch1();
     }
     
+    // Consider the value of the watched monomial and the constante
+    odd = (getValueMonomial(mr) == l_True) ^ e.constante();
     // Look for a replacement monomial and count the satisfied monomials
-    odd = false;
     for (int i = 0; i < e.size(); ++i) {
         if (i != w1 && i != w2) {
             val = getValueMonomial(toInt(e[i]));
@@ -1572,8 +1584,6 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
         }
     }
     changed = false;
-    // Consider the value of the watched monomial and the constante
-    odd ^= ((getValueMonomial(mr) == l_True) ^ e.constante());
     val = getValueMonomial(toInt(e[w2]));
     // If the other watched monomial is affected, we check if we have a conflict
     if (val != l_Undef) {
@@ -2089,7 +2099,6 @@ lbool Solver::search(int nof_conflicts) {
             if (makeDot) {    
                 conflictDot();
             }
-
             newDescent = false;
             if(parallelJobIsFinished())
                 return l_Undef;
