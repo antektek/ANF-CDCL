@@ -400,7 +400,7 @@ Var Solver::newVar(bool sign, bool dvar) {
     watchedLiterals.init(mkLit(v, false));
     watchedLiterals.init(mkLit(v, true));
     assigns.push(l_Undef);
-    vardata.push(mkVarData(CRef_Undef, 0));
+    vardata.push(mkVarData(CRef_Undef, 0, CRef_Undef));
     presenceLiterals.push();
     presenceLiterals.push();
     activity.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
@@ -1056,54 +1056,42 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 }
 */
 
-void Solver::analyzeEquation(ERef eq, Lit p) {
+void Solver::considerVariable(Var v) {
+    Lit lit = mkLit(v, assigns[v] == l_True);
+    if (!present[toInt(lit)]) {
+        present[toInt(lit)] = true;
+        if (level(v) == decisionLevel()) {
+            ++current;
+        }
+    }
+}
+
+void Solver::analyzeEquation(ERef eq, MRef prop, Lit p) {
     MRef mr;
     lbool val;
     int idx;
-    Lit lit;
     // Consider each monomial in the equation
     for (int i = 0; i < ea[eq].size(); ++i) {
         mr = toInt(ea[eq][i]);
         val = getValueMonomial(mr);
         // If the monomial is falsified, we only consider the watched literal
         if (val == l_False) {
-            idx = ma[mr].getWatch1();
-            if (assigns[var(ma[mr][idx])] == l_False) {
-                lit = mkLit(var(ma[mr][idx]), false);
+            if (mr != prop) {
+                idx = ma[mr].getWatch1();
+                considerVariable(var(ma[mr][idx]));
             } else {
-                lit = mkLit(var(ma[mr][idx]), true);
-            }
-            if (!present[toInt(lit)]) {
-                present[toInt(lit)] = true;
-                if (level(var(ma[mr][idx])) == decisionLevel()) {
-                    ++current;
+                for (int j = 0; j < ma[mr].size(); ++j) {
+                    if (var(ma[mr][j]) != var(p)) {
+                        considerVariable(var(ma[mr][j]));
+                    }
                 }
             }
         // If the monomial is satisfied, we have to consider all the literals appaering in it
         } else {
-            bool consider = true;
-            if (p != lit_Undef) {
-                for (int j = 0; j < ma[mr].size(); ++j) {
-                    if (var(p) == var(ma[mr][j])) {
-                        consider = false;
-                        break;
-                    }
-                }
-            }
-            if (consider) {
+            if (mr!= prop) {
                 for (int j = 0; j < ma[mr].size(); ++j) {
                     if (value(ma[mr][j]) != l_Undef) {
-                        if (assigns[var(ma[mr][j])] == l_False) {
-                            lit = mkLit(var(ma[mr][j]), false);
-                        } else {
-                            lit = mkLit(var(ma[mr][j]), true);
-                        }
-                        if (!present[toInt(lit)]) {
-                            present[toInt(lit)] = true;
-                            if (level(var(ma[mr][j])) == decisionLevel()) {
-                                ++current;
-                            }
-                        }
+                        considerVariable(var(ma[mr][j]));
                     }
                 }
             }
@@ -1117,7 +1105,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     current = 0;
     out_btlevel = 0;
     // Consider the conflict
-    analyzeEquation(confl, lit_Undef);
+    analyzeEquation(confl, CRef_Undef, lit_Undef);
     // Get back in the trail and consider the reasons
     for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
         p = trail[i];
@@ -1128,7 +1116,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
-                analyzeEquation(prev, p);
+                analyzeEquation(prev, propagator(var(p)), p);
             }
             // Remove the literal
             present[toInt(~p)] = false;
@@ -1220,6 +1208,9 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
 
     references.push(er2);
     references.push(er1);
+
+    propagators.push(toInt(ea[er2][0]));
+    propagators.push(toInt(ea[er1][0]));
 }
 
 
@@ -1279,6 +1270,7 @@ void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
     // Propagations
     toPropagate.push(out_learnt[0]);
     references.push(er);
+    propagators.push(toInt(ea[er][0]));
 }
 
 
@@ -1364,10 +1356,10 @@ void Solver::analyzeFinal(Lit p, vec <Lit> &out_conflict) {
 }
 
 
-void Solver::uncheckedEnqueue(Lit p, CRef from) {
+void Solver::uncheckedEnqueue(Lit p, CRef from, MRef prop) {
     assert(value(p) == l_Undef);
     assigns[var(p)] = lbool(!sign(p));
-    vardata[var(p)] = mkVarData(from, decisionLevel());
+    vardata[var(p)] = mkVarData(from, decisionLevel(), prop);
     trail.push_(p);
 }
 
@@ -1603,6 +1595,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                 else if (value(lit) == l_Undef) {
                     toPropagate.push(lit);
                     references.push(er);
+                    if (useConflictAnalysis) {
+                        propagators.push(toInt(e[w2]));
+                    }
                 }
             }
         }
@@ -1625,6 +1620,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                 else if (value(lit) == l_Undef) {
                     toPropagate.push(~lit);
                     references.push(er);
+                    if (useConflictAnalysis) {
+                        propagators.push(mr);
+                    }
                 }
             }
         }
@@ -1667,7 +1665,11 @@ ERef Solver::propagate() {
         else if (value(p) == l_False) {
             return references[a];
         }
-        uncheckedEnqueue(p, references[a]);
+        if (useConflictAnalysis) {
+            uncheckedEnqueue(p, references[a], propagators[a]);
+        } else {
+            uncheckedEnqueue(p, references[a]);
+        }
         if (makeDot) {
             propagatingDot(p);
         }
@@ -2094,15 +2096,19 @@ lbool Solver::search(int nof_conflicts) {
         CRef confl = propagate();
         toPropagate.clear();
         references.clear();
+        if (useConflictAnalysis) {
+            propagators.clear();
+        }
 
         if(confl != CRef_Undef) {
             if (makeDot) {    
                 conflictDot();
             }
             newDescent = false;
+            /*
             if(parallelJobIsFinished())
                 return l_Undef;
-
+            */
             if(!aDecisionWasMade)
                 stats[noDecisionConflict]++;
             aDecisionWasMade = false;
@@ -2169,6 +2175,7 @@ lbool Solver::search(int nof_conflicts) {
                     ++stats[nbUn];
                     toPropagate.push(learnt_clause[0]);
                     references.push(CRef_Undef);
+                    propagators.push(CRef_Undef);
                     if (makeDot) {
                         assertive = 1;
                     }
@@ -2334,6 +2341,9 @@ lbool Solver::search(int nof_conflicts) {
             newDecisionLevel();
             toPropagate.push(next);
             references.push(CRef_Undef);
+            if (useConflictAnalysis) {
+                propagators.push(CRef_Undef);
+            }
             if (makeDot) {
                 assumingDot();
             }

@@ -299,8 +299,8 @@ protected:
     bool forceUnsatOnNewDescent;
     // Helper structures:
     //
-    struct VarData { CRef reason; int level; };
-    static inline VarData mkVarData(CRef cr, int l){ VarData d = {cr, l}; return d; }
+    struct VarData { CRef reason; int level; MRef propagator; };
+    static inline VarData mkVarData(CRef cr, int l, MRef p){ VarData d = {cr, l, p}; return d; }
 
     struct Watcher {
         CRef cref;
@@ -360,6 +360,7 @@ protected:
     vec<vec<pair<MRef, int>>>      presenceLiterals;
     vec<Lit>            toPropagate;
     vec<ERef>           references;
+    vec<MRef>           propagators;
     vec<MRef>           affected;
     vec<bool>           present;
     int                 init_var;
@@ -367,7 +368,7 @@ protected:
     bool                odd;
     int                 current;
     bool                isUnit;
-    bool                useConflictAnalysis = true;
+    bool                useConflictAnalysis = false;
     bool                makeDot = false;
     int                 maxSizeLearning = 6;
 
@@ -450,7 +451,7 @@ protected:
     void     insertVarOrder   (Var x);                                                 // Insert a variable in the decision order priority queue.
     Lit      pickBranchLit    ();                                                      // Return the next decision variable.
     void     newDecisionLevel ();                                                      // Begins a new decision level.
-    void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
+    void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef, MRef prop = CRef_Undef); // Enqueue a literal. Assumes value of literal is undefined.
     bool     enqueue          (Lit p, CRef from = CRef_Undef);                         // Test if fact 'p' contradicts current state, enqueue otherwise.
     ERef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
     CRef     propagateUnaryWatches(Lit p);                                                  // Perform propagation on unary watches of p, can find only conflicts
@@ -460,8 +461,9 @@ protected:
     lbool    getValueMonomial (MRef mr);
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
+    void     considerVariable (Var v);
     void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);
-    void     analyzeEquation  (ERef eq, Lit p);
+    void     analyzeEquation  (ERef eq, MRef prop, Lit p);
     void     learnEquation    (vec<Lit> &out_learnt);
     void     learnBinaryEquation(vec<Lit> &out_learnt);
     void     analyzeFinal     (Lit p, vec<Lit>& out_conflict);                         // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
@@ -506,6 +508,7 @@ protected:
     uint32_t abstractLevel    (Var x) const; // Used to represent an abstraction of sets of decision levels.
     CRef     reason           (Var x) const;
     int      level            (Var x) const;
+    MRef     propagator       (Var x) const;
     double   progressEstimate ()      const; // DELETE THIS ?? IT'S NOT VERY USEFUL ...
     bool     withinBudget     ()      const;
     inline bool isSelector(Var v) {return (incremental && v>nbVarsInitialFormula);}
@@ -570,6 +573,7 @@ public:
 
 inline CRef Solver::reason(Var x) const { return vardata[x].reason; }
 inline int  Solver::level (Var x) const { return vardata[x].level; }
+inline MRef Solver::propagator (Var x) const { return vardata[x].propagator; }
 
 inline void Solver::insertVarOrder(Var x) {
     if (!order_heap.inHeap(x) && decision[x]) order_heap.insert(x); }
