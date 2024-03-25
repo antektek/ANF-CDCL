@@ -1588,16 +1588,10 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
         if (!odd) {
             // If it has to be satisfied, we satisfy all the literals apperaing in it
             for (int i = 0; i < ma[toInt(e[w2])].size(); ++i) {
-                lit = ma[toInt(e[w2])][i];
-                if (value(lit) == l_False) {
-                    return er;
-                }
-                else if (value(lit) == l_Undef) {
-                    toPropagate.push(lit);
-                    references.push(er);
-                    if (useConflictAnalysis) {
-                        propagators.push(toInt(e[w2]));
-                    }
+                toPropagate.push(ma[toInt(e[w2])][i]);
+                references.push(er);
+                if (useConflictAnalysis) {
+                    propagators.push(toInt(e[w2]));
                 }
             }
         }
@@ -1613,16 +1607,10 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
                 }
             }
             if (isUnit) {
-                lit = ma[mr][w];
-                if (value(lit) == l_True) {
-                    return er;
-                }
-                else if (value(lit) == l_Undef) {
-                    toPropagate.push(~lit);
-                    references.push(er);
-                    if (useConflictAnalysis) {
-                        propagators.push(mr);
-                    }
+                toPropagate.push(~ma[mr][w]);
+                references.push(er);
+                if (useConflictAnalysis) {
+                    propagators.push(mr);
                 }
             }
         }
