@@ -403,6 +403,8 @@ Var Solver::newVar(bool sign, bool dvar) {
     vardata.push(mkVarData(CRef_Undef, 0, CRef_Undef));
     presenceLiterals.push();
     presenceLiterals.push();
+    toFalsify.push();
+    toFalsify.push();
     activity.push(rnd_init_act ? drand(random_seed) * 0.00001 : 0);
     seen.push(0);
     permDiff.push(0);
@@ -419,16 +421,10 @@ Var Solver::newVar(bool sign, bool dvar) {
 
 
 MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
-    string code("");
     MRef mr;
-    code += to_string(toInt(m[0]));
-    for (int i = 1; i < m.size(); ++i) {
-        code += " " + to_string(toInt(m[i]));
-    }
     if (createdMonomials.count(code)) {
         // The monomial already exists
         mr = createdMonomials[code];
-        newMonomial = false;
     } else {
         // Create the new monomial
         mr = ma.alloc(m, learnt);
@@ -450,24 +446,34 @@ MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
 }
 
 
-bool Solver::addMonomial_(vec<Lit> &ps, vec<Lit> &equ) {
+bool Solver::addMonomial_(vec<Lit> &ps, vec<Lit> &equ, bool &cst) {
     assert(decisionLevel() == 0);
     if (!ok) {
         return false;
     }
     
-    // Remove duplicate literals
+    // Remove duplicate literals and check values
     Lit p;
     int i, j;
     sort(ps);
+    code = "( ";
     for (i = j = 0, p = lit_Undef; i < ps.size(); ++i) {
-        if (ps[i] != p) {
+        if (value(ps[i]) == l_False || ps[i] == ~p) {
+            return true;
+        }
+        else if (value(ps[i]) != l_True && ps[i] != p) {
             ps[j++] = p = ps[i];
+            code += to_string(toInt(ps[i])) + " ";
         }
     }
     ps.shrink(i - j);
+    code += ")";
 
     // Create the monomial if necessary
+    if (ps.size() == 0) {
+        cst = !cst;
+        return true;
+    }
     MRef mr = allocateMonomial(ps, false, true);
     equ.push(mkLit(mr >> 1, mr & 1));
     return true;
@@ -491,7 +497,45 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
     }
     ps.shrink(i - j);
 
-    ERef er = ea.alloc(ps, false, false, cst);
+    ERef er;
+    if (ps.size() == 1) {
+        const Clause &m = ma[toInt(ps[0])];
+        if (!cst) {
+            for (i = 0; i < m.size(); ++i) {
+                toPropagate.push(m[i]);
+                references.push(CRef_Undef);
+                if (useConflictAnalysis) {
+                    propagators.push(CRef_Undef);
+                }
+            }
+            ok = (propagate() == CRef_Undef);
+            toPropagate.clear();
+            references.clear();
+            propagators.clear();
+            return ok;
+        }
+        if (m.size() == 1) {
+            toPropagate.push(~m[0]);
+            references.push(CRef_Undef);
+            if (useConflictAnalysis) {
+                propagators.push(CRef_Undef);
+            }
+            ok = (propagate() == CRef_Undef);
+            toPropagate.clear();
+            references.clear();
+            propagators.clear();
+            return ok;
+        }
+        for (int i = 0; i < m.size(); ++i) {
+            er = ea.alloc(ps, false, false, cst);
+            equations.push(er);
+            attachEquation(er);
+            toFalsify[toInt(m[i])].push(make_pair(toInt(ps[0]), er));
+            return true;
+        }
+    }
+    // Create the equation
+    er = ea.alloc(ps, false, false, cst);
     equations.push(er);
     attachEquation(er);
     return true;
@@ -554,8 +598,13 @@ inline void Solver::attachMonomial(MRef mr) {
 
 
 void Solver::attachEquation(ERef er) {
-    watchedMonomials[ea[er][0]].push(Watcher(er, ea[er][1]));
-    watchedMonomials[ea[er][1]].push(Watcher(er, ea[er][0]));
+    const Clause &e = ea[er];
+    if (e.size() == 1) {
+        watchedMonomials[e[0]].push(Watcher(er, e[0]));
+    } else {
+        watchedMonomials[e[0]].push(Watcher(er, e[0]));
+        watchedMonomials[e[1]].push(Watcher(er, e[1]));
+    }
 }
 
 
@@ -644,6 +693,60 @@ void Solver::removeClause(CRef cr, bool inPurgatory) {
 }
 
 
+void Solver::removeMonomial(MRef mr) {
+    Clause &m = ma[mr];
+    int w1 = m.getWatch1();
+
+    // Remove the watched literal
+    vec<Watcher> &ws = watchedLiterals[m[w1]];
+    for (int i = 0; i < ws.size(); ++i) {
+        if (ws[i].cref == mr) {
+            ws[i] = ws.last();
+            ws.pop();
+            break;
+        }
+    }
+
+    // Remove presence of literals
+    for (int i = 0; i < m.size(); ++i) {
+        vec<pair<MRef, int>> &neg = presenceLiterals[toInt(m[i])];
+        for (int j = 0; j < neg.size(); ++j) {
+            if (neg[j].first == mr) {
+                neg[j] = neg.last();
+                neg.pop();
+                break;
+            }
+        }
+        vec<pair<MRef, ERef>> &fal = toFalsify[toInt(m[i])];
+        for (int j = 0; j < fal.size(); ++j) {
+            if (fal[j].first == mr) {
+                fal[j] = fal.last();
+                fal.pop();
+                break;
+            }
+        }
+    }
+    ma.free(mr);
+}
+
+void Solver::removeEquation(ERef er) {
+    Clause &e = ea[er];
+    int w1 = e.getWatch1();
+
+    removeMonomial(toInt(e[0]));
+
+    vec<Watcher> &ws = watchedMonomials[e[w1]];
+    for (int i = 0; i < ws.size(); ++i) {
+        if (ws[i].cref == er) {
+            ws[i] = ws.last();
+            ws.pop();
+            break;
+        }
+    }
+    ea.free(er);
+}
+
+
 bool Solver::satisfied(const Clause &c) const {
 #ifdef INCREMENTAL
     if(incremental)
@@ -719,6 +822,12 @@ void Solver::cancelUntil(int level) {
             assigns[x] = l_Undef;
             if(phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
                 polarity[x] = sign(trail[c]);
+            }
+            if (useConflictAnalysis) {
+                ERef er = reason(x);
+                if (er != CRef_Undef && ea[er].learnt()) {
+                    ea[er].setUsed(false);
+                }
             }
             insertVarOrder(x);
         }
@@ -1057,7 +1166,7 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 */
 
 void Solver::considerVariable(Var v) {
-    Lit lit = mkLit(v, assigns[v] == l_True);
+    Lit lit = mkLit(v, assigns[v] == l_False);
     if (!present[toInt(lit)]) {
         present[toInt(lit)] = true;
         if (level(v) == decisionLevel()) {
@@ -1112,14 +1221,14 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
         if (reason(var(p)) == CRef_Undef) {
             break;
         }
-        if (present[toInt(~p)]) {
+        if (present[toInt(p)]) {
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
                 analyzeEquation(prev, propagator(var(p)), p);
             }
             // Remove the literal
-            present[toInt(~p)] = false;
+            present[toInt(p)] = false;
             if (level(var(p)) == decisionLevel()) {
                 --current;
             }
@@ -1147,130 +1256,29 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
 
 
 void Solver::learnEquation(vec<Lit> &out_learnt) {
-    // Learn equations a + z + az and z + -B
-    vec<Lit> eq1, eq2, mon;
-    MRef mr;
-    ERef er1, er2;
-    Var v;
-    
-    // a
-    mon.push(out_learnt[0]);
-    mr = allocateMonomial(mon, true, true);
-    eq1.push(mkLit(mr >> 1, mr & 1));
+    vec<Lit> eq;
+    MRef mr = ma.alloc(out_learnt, true);
+    attachMonomial(mr);
 
-    // z
-    v = newVar();
-    mon.clear();
-    mon.push(mkLit(v, false));
-    mr = allocateMonomial(mon, true, true);
-    eq1.push(mkLit(mr >> 1, mr & 1));
-    eq2.push(mkLit(mr >> 1, mr & 1));
+    watchedMonomials.init(mkLit(mr >> 1, false));
+    watchedMonomials.init(mkLit(mr >> 1, true));
 
-    // az
-    mon.clear();
-    mon.push(out_learnt[0]);
-    mon.push(mkLit(v, false));
-    mr = allocateMonomial(mon, true, true);
-    eq1.push(mkLit(mr >> 1, mr & 1));
-
-    // -B
-    mon.clear();
-    // Place the watched literal
-    int maxi = 0, idx = -1;
-    for(int i = 1; i < out_learnt.size(); ++i) {
-        mon.push(~out_learnt[i]);
-        if (level(var(mon.last())) > maxi) {
-            maxi = level(var(mon.last()));
-            idx = i - 1;
-        }
-    }
-    // Create the monomial
-    newMonomial = true;
-    mr = allocateMonomial(mon, true, false);
-    if (newMonomial) {
-        watchedLiterals[mon[idx]].push(Watcher(mr, mon[idx]));
-        ma[mr].setWatches(idx);
-    }
-    eq2.push(mkLit(mr >> 1, mr & 1));
-
-    // Learn the equations
-    er1 = ea.alloc(eq1, true);
-    learnts.push(er1);
-    attachEquation(er1);
-
-    er2 = ea.alloc(eq2, true);
-    learnts.push(er2);
-    attachEquation(er2);
-
-    // Propagations
-    toPropagate.push(mkLit(v, true));
-    toPropagate.push(out_learnt[0]);
-
-    references.push(er2);
-    references.push(er1);
-
-    propagators.push(toInt(ea[er2][0]));
-    propagators.push(toInt(ea[er1][0]));
-}
-
-
-void Solver::learnBinaryEquation(vec<Lit> &out_learnt) {
-    // Learn equation a + b + ab
-    vec<Lit> eq, mon;
-    MRef mr;
-    ERef er;
-    
-    // a
-    mon.push(out_learnt[0]);
-    mr = allocateMonomial(mon, true, true);
+    // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
-
-    // b
-    mon.clear();
-    mon.push(out_learnt[1]);
-    mr = allocateMonomial(mon, true, true);
-    eq.push(mkLit(mr >> 1, mr & 1));
-
-    // ab
-    mon.clear();
-    // Place the watched literal
-    if (toInt(out_learnt[0]) < toInt(out_learnt[1])) {
-        mon.push(out_learnt[0]);
-        mon.push(out_learnt[1]);
-    } else {
-        mon.push(out_learnt[1]);
-        mon.push(out_learnt[0]);
-    }
-    // Create the monomial
-    string code = to_string(toInt(mon[0])) + " " + to_string(toInt(mon[1]));
-    if (createdMonomials.count(code)) {
-        mr = createdMonomials[code];
-    } else {
-        mr = ma.alloc(mon, true);
-        watchedMonomials.init(mkLit(mr >> 1, false));
-        watchedMonomials.init(mkLit(mr >> 1, true));
-        createdMonomials[code] = mr;
-        presenceLiterals[toInt(mon[0])].push(make_pair(mr, 0));
-        presenceLiterals[toInt(mon[1])].push(make_pair(mr, 1));
-        if (level(var(mon[0])) < level(var(mon[1]))) {
-            watchedLiterals[mon[0]].push(Watcher(mr, mon[0]));
-            ma[mr].setWatches(0);
-        } else {
-            watchedLiterals[mon[1]].push(Watcher(mr, mon[1]));
-            ma[mr].setWatches(1);
-        }
-    }
-    eq.push(mkLit(mr >> 1, mr & 1));
-
-    // Learn the equation
-    er = ea.alloc(eq, true);
+    ERef er = ea.alloc(eq, true, false, true);
     learnts.push(er);
     attachEquation(er);
 
-    // Propagations
-    toPropagate.push(out_learnt[0]);
+    // Update presence of literals
+    for (int i = 0; i < out_learnt.size(); ++i) {
+        presenceLiterals[toInt(out_learnt[i])].push(make_pair(mr, i));
+        toFalsify[toInt(out_learnt[i])].push(make_pair(mr, er));
+    }
+
+    // Propagation
+    toPropagate.push(~out_learnt[0]);
     references.push(er);
-    propagators.push(toInt(ea[er][0]));
+    propagators.push(mr);
 }
 
 
@@ -1518,13 +1526,42 @@ void Solver::forceWatchedLiteral(MRef mr, Lit lit, int idx) {
         for (int i = 0; i < ws.size(); ++i) {
             if (ws[i].cref == mr) {
                 ws[i] = ws.last();
-                ws.shrink(1);
+                ws.pop();
                 break;
             }
         }
         // Update the new watched literal
-        watchedLiterals[~lit].push(Watcher(mr, lit));
+        watchedLiterals[~lit].push(Watcher(mr, ~lit));
         m.setWatches(idx);
+    }
+}
+
+void Solver::checkMonomialToFalsify(MRef mr, ERef er) {
+    Clause &m = ma[mr];
+    int w = m.getWatch1();
+    if (value(m[w]) != l_False) {
+        for (int i = 0; i < m.size(); ++i) {
+            if (i != w && value(m[i]) == l_Undef) {
+                if (value(m[w]) == l_Undef) {
+                    return;
+                } else {
+                    vec<Watcher> &ws = watchedLiterals[m[w]];
+                    for (int j = 0; j < ws.size(); ++j) {
+                        if (ws[j].cref == mr) {
+                            ws[j] = ws.last();
+                            ws.pop();
+                            break;
+                        }
+                    } 
+                    watchedLiterals[m[i]].push(Watcher(mr, m[i]));
+                    m.setWatches(i);
+                    w = i;
+                }
+            }
+        }
+        toPropagate.push(~m[w]);
+        references.push(er);
+        propagators.push(mr);
     }
 }
 
@@ -1552,6 +1589,15 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
     Clause &e = ea[er];
     lbool val;
     Lit lit;
+
+    changed = false;
+    if (e.size() == 1) {
+        if ((getValueMonomial(toInt(e[0])) == l_True) ^ e.constante()) {
+            return CRef_Undef;
+        } else {
+            return er;
+        }
+    }
     // Get the watched monomials
     int w1 = e.getWatch1(), w2 = e.getWatch2();
     
@@ -1575,8 +1621,8 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             odd ^= (val == l_True);
         }
     }
-    changed = false;
-    val = getValueMonomial(toInt(e[w2]));
+    other = toInt(e[w2]);
+    val = getValueMonomial(other);
     // If the other watched monomial is affected, we check if we have a conflict
     if (val != l_Undef) {
         odd ^= (val == l_True);
@@ -1587,33 +1633,57 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
         // The other watched monomial is not affected yet
         if (!odd) {
             // If it has to be satisfied, we satisfy all the literals apperaing in it
-            for (int i = 0; i < ma[toInt(e[w2])].size(); ++i) {
-                toPropagate.push(ma[toInt(e[w2])][i]);
+            for (int i = 0; i < ma[other].size(); ++i) {
+                toPropagate.push(ma[other][i]);
                 references.push(er);
                 if (useConflictAnalysis) {
-                    propagators.push(toInt(e[w2]));
+                    propagators.push(other);
                 }
             }
         }
         // If it has to be falsified, we can only propagate a monomial with a unique literal
         else {
-            MRef mr = toInt(e[w2]);
             isUnit = true;
-            int w = ma[mr].getWatch1();
-            for (int i = 0; i < ma[mr].size(); ++i) {
-                if (i != w && value(ma[mr][i]) == l_Undef) {
+            int w = ma[other].getWatch1();
+            for (int i = 0; i < ma[other].size(); ++i) {
+                if (i != w && value(ma[other][i]) == l_Undef) {
                     isUnit = false;
                     break;
                 }
             }
             if (isUnit) {
-                toPropagate.push(~ma[mr][w]);
+                toPropagate.push(~ma[other][w]);
                 references.push(er);
                 if (useConflictAnalysis) {
-                    propagators.push(mr);
+                    propagators.push(other);
                 }
             }
         }
+    }
+    return CRef_Undef;
+}
+
+ERef Solver::updateAffectedMonomials() {
+    int i, j, k;
+    MRef mr;
+    ERef confl;
+    for (int i = 0; i < affected.size(); ++i) {
+        mr = affected[i];
+        vec<Watcher> &ws = watchedMonomials[mkLit(mr >> 1, mr & 1)];
+        for (j = k = 0; j < ws.size(); ++j) {
+            confl = updateWatchedMonomial(ws[j].cref, mr);
+            // Check if we have a conflit
+            if (confl != CRef_Undef) {
+                for (; j < ws.size(); ws[k++] = ws[j++]);
+                ws.shrink(j - k);
+                return confl;
+            }
+            // No modification of watched monomial
+            if (!changed) {
+                ws[k++] = ws[j];
+            }
+        }
+        ws.shrink(j - k);
     }
     return CRef_Undef;
 }
@@ -1638,12 +1708,10 @@ void Solver::printEquation(ERef er) {
 }
 
 ERef Solver::propagate() {
-    int i, j, k, l;
+    int i, j;
     MRef mr;
     ERef confl = CRef_Undef;
     Lit p;
-    watchedLiterals.cleanAll();
-    watchedMonomials.cleanAll();
     for (int a = 0; a < toPropagate.size(); ++a) {
         p = toPropagate[a];
         // Check if the lieral was already satisfied or falsified
@@ -1654,14 +1722,24 @@ ERef Solver::propagate() {
             return references[a];
         }
         if (useConflictAnalysis) {
+            if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
+                ea[references[a]].setUsed(true);
+            }
             uncheckedEnqueue(p, references[a], propagators[a]);
         } else {
-            uncheckedEnqueue(p, references[a]);
+            uncheckedEnqueue(p);
         }
         if (makeDot) {
             propagatingDot(p);
         }
         ++propagations;
+        
+        // Check monomials to falsify
+        vec<pair<MRef, CRef>> &check = toFalsify[toInt(p)];
+        for (i = 0; i < check.size(); ++i) {
+            checkMonomialToFalsify(check[i].first, check[i].second);
+        }
+        
         // Force falsified literals
         vec<pair<MRef, int>> &negated = presenceLiterals[toInt(~p)];
         affected.clear();
@@ -1670,24 +1748,11 @@ ERef Solver::propagate() {
             forceWatchedLiteral(mr, p, negated[i].second);
             affected.push(mr);
         }
+
         // Update falsified monomials
-        for (int i = 0; i < affected.size(); ++i) {
-            mr = affected[i];
-            vec<Watcher> &ws = watchedMonomials[mkLit(mr >> 1, mr & 1)];
-            for (j = k = 0; j < ws.size(); ++j) {
-                confl = updateWatchedMonomial(ws[j].cref, mr);
-                // Check if we have a conflit
-                if (confl != CRef_Undef) {
-                    for (; j < ws.size(); ws[k++] = ws[j++]);
-                    ws.shrink(j - k);
-                    return confl;
-                }
-                // No modification of watched monomial
-                if (!changed) {
-                    ws[k++] = ws[j];
-                }
-            }
-            ws.shrink(j - k);
+        confl = updateAffectedMonomials();
+        if (confl != CRef_Undef) {
+            return confl;
         }
         
         // Update satisfied watched literals
@@ -1704,26 +1769,12 @@ ERef Solver::propagate() {
         wl.shrink(i - j);
 
         // Update satisfied monomials
-        for (int i = 0; i < affected.size(); ++i) {
-            mr = affected[i];
-            vec<Watcher> &wm = watchedMonomials[mkLit(mr >> 1, mr & 1)];
-            for (k = l = 0; k < wm.size(); ++k) {
-                confl = updateWatchedMonomial(wm[k].cref, mr);
-                // Check if we have a conflit
-                if (confl != CRef_Undef) {
-                    for (; k < wm.size(); wm[l++] = wm[k++]);
-                    wm.shrink(k - l);
-                    return confl;
-                }
-                // No modification of watched monomial
-                if (!changed) {
-                    wm[l++] = wm[k];
-                }
-            }
-            wm.shrink(k - l);
+        confl = updateAffectedMonomials();
+        if (confl != CRef_Undef) {
+            return confl;
         }
     }
-    return CRef_Undef;
+    return confl;
 }
 
 /*_________________________________________________________________________________________________
@@ -1822,6 +1873,25 @@ CRef Solver::propagateUnaryWatches(Lit p) {
 
 
 void Solver::reduceDB() {
+    int i, j;
+    ERef er;
+    stats[nbReduceDB]++;
+
+    for (i = j = 0; i < learnts.size(); ++i) {
+        er = learnts[i];
+        if (!(ea[er].getUsed()) && ma[toInt(ea[er][0])].size() > maxSizeLearning) {
+            removeEquation(learnts[i]);
+            stats[nbRemovedClauses]++;
+        } else {
+            learnts[j++] = learnts[i];
+        }
+    }
+    learnts.shrink(i - j);
+    kept = learnts.size();
+}
+
+/*
+void Solver::reduceDB() {
 
     int i, j;
     stats[nbReduceDB]++;
@@ -1868,7 +1938,7 @@ void Solver::reduceDB() {
 
     checkGarbage();
 }
-
+*/
 
 void Solver::removeSatisfied(vec <CRef> &cs) {
     int i, j;
@@ -2108,9 +2178,10 @@ lbool Solver::search(int nof_conflicts) {
             conflictC++;
             conflictsRestarts++;
             
+            /*
             if(conflicts % 5000 == 0 && var_decay < max_var_decay)
                 var_decay += 0.01;
-            
+            */
             if(verbosity >= 1 && starts>0 && conflicts % verbEveryConflicts == 0) {
                 printf("c | %8d   %7d    %5d | %7d %8d %8d | %5d %8d   %6d %8d | %6.3f %% |\n",
                        (int) starts, (int) stats[nbstopsrestarts], (int) (conflicts / starts),
@@ -2161,31 +2232,19 @@ lbool Solver::search(int nof_conflicts) {
                 if (learnt_clause.size() == 1) {
                     // Unary equation
                     ++stats[nbUn];
-                    toPropagate.push(learnt_clause[0]);
+                    toPropagate.push(~learnt_clause[0]);
                     references.push(CRef_Undef);
                     propagators.push(CRef_Undef);
                     if (makeDot) {
                         assertive = 1;
                     }
-                    cancelUntil(backtrack_level);
-                }
-                else if (learnt_clause.size() == 2) {
-                    // Binary equation
-                    ++stats[nbBin];
-                    learnBinaryEquation(learnt_clause);
+                } else {
+                    learnEquation(learnt_clause);
                     if (makeDot) {
                         assertive = 1;
                     }
-                    cancelUntil(backtrack_level);
-                } 
-                else {
-                    // Equation of size > 2
-                    learnEquation(learnt_clause);
-                    if (makeDot) {
-                        assertive = 2;
-                    }
-                    cancelUntil(backtrack_level);
-                } 
+                }
+                cancelUntil(backtrack_level); 
             }
             
 
@@ -2236,10 +2295,10 @@ lbool Solver::search(int nof_conflicts) {
                 uncheckedEnqueue(learnt_clause[0], cr);
 
             }
-            */
+
             varDecayActivity();
             claDecayActivity();
-
+            */
 
         } else {
             /* Glucose restart, delete comment when integrating conflict analysis
@@ -2269,20 +2328,19 @@ lbool Solver::search(int nof_conflicts) {
                 return l_False;
             }
             */
-            /*
-            // Perform clause database reduction !
-            if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
-               (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
 
+            // Perform clause database reduction !
+            //if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
+            //   (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
+            if (useConflictAnalysis && learnts.size() >= kept + maxAdded) {
                 if(learnts.size() > 0) {
                     curRestart = (conflicts / nbclausesbeforereduce) + 1;
                     reduceDB();
-                    performLCM = 1;
-                    if(!panicModeIsEnabled())
-                        nbclausesbeforereduce += incReduceDB;
+                    //performLCM = 1;
+                    //if(!panicModeIsEnabled())
+                    //    nbclausesbeforereduce += incReduceDB;
                 }
             }
-            */
 
             lastLearntClause = CRef_Undef;
             Lit next = lit_Undef;
@@ -2307,7 +2365,7 @@ lbool Solver::search(int nof_conflicts) {
                 next = pickBranchLit();
                 if(next == lit_Undef) {
                     printf("s ");
-                    for (Var v = 0; v < init_var; ++v) {
+                    for (Var v = 0; v < nVars(); ++v) {
                         if (value(v) == l_False) {
                             printf("0");
                         } else {
@@ -2422,7 +2480,6 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     model.clear();
     conflict.clear();
-    init_var = nVars();
     if(!ok) return l_False;
     double curTime = cpuTime();
 

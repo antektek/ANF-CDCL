@@ -178,6 +178,7 @@ class Clause {
       unsigned size       : BITS_REALSIZE;
 
       bool constante;
+      bool used;
       int watch[2];
 
 #ifdef INCREMENTAL
@@ -281,6 +282,8 @@ public:
     void setOneWatched(bool b) {header.oneWatched = b;}
     bool getOneWatched() {return header.oneWatched;}
 
+    bool getUsed() { return header.used; }
+    void setUsed(bool b) { header.used = b; }
     int getWatch1() { return header.watch[0]; }
     int getWatch2() { return header.watch[1]; }
     void setWatches(int w1, int w2 = -1) { header.watch[0] = w1; header.watch[1] = w2; }

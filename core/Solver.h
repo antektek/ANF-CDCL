@@ -126,7 +126,7 @@ public:
     //
     virtual Var     newVar    (bool polarity = true, bool dvar = true); // Add a new variable with parameters specifying variable mode.
     bool    addClause (const vec<Lit>& ps);                     // Add a clause to the solver.
-    bool    addMonomial(const vec<Lit>& ps, vec<Lit> &equ);
+    bool    addMonomial(const vec<Lit>& ps, vec<Lit> &equ, bool &cst);
     bool    addEquation(const vec<Lit>& ps, bool &cst);
     bool    addEmptyClause();                                   // Add the empty clause, making the solver contradictory.
     bool    addClause (Lit p);                                  // Add a unit clause to the solver.
@@ -134,7 +134,7 @@ public:
     bool    addClause (Lit p, Lit q, Lit r);                    // Add a ternary clause to the solver.
     virtual bool    addClause_(      vec<Lit>& ps);                     // Add a clause to the solver without making superflous internal copy. Will
                                                                 // change the passed vector 'ps'
-    virtual bool    addMonomial_(vec<Lit>& ps, vec<Lit> &equ);
+    virtual bool    addMonomial_(vec<Lit>& ps, vec<Lit> &equ, bool &cst);
     virtual bool    addEquation_(vec<Lit>& ps, bool &cst);
 
     // Solving:
@@ -357,20 +357,25 @@ protected:
     vec<CRef>           mostActiveClauses; // Used to keep most active clauses (instead of removing them)
 
     unordered_map<string, MRef> createdMonomials;
-    vec<vec<pair<MRef, int>>>      presenceLiterals;
+    vec<vec<pair<MRef, int>>> presenceLiterals;
+    vec<vec<pair<MRef, ERef>>> toFalsify;
     vec<Lit>            toPropagate;
     vec<ERef>           references;
     vec<MRef>           propagators;
     vec<MRef>           affected;
     vec<bool>           present;
-    int                 init_var;
-    bool                newMonomial;
+    MRef                other;
+    string              code;
     bool                odd;
     int                 current;
     bool                isUnit;
-    bool                useConflictAnalysis = false;
+    int                 kept = 0;
+
+    // Config
+    bool                useConflictAnalysis = true;
     bool                makeDot = false;
     int                 maxSizeLearning = 6;
+    int                 maxAdded = 200;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
@@ -457,15 +462,16 @@ protected:
     CRef     propagateUnaryWatches(Lit p);                                                  // Perform propagation on unary watches of p, can find only conflicts
     void     forceWatchedLiteral(MRef mr, Lit lit, int idx);
     bool     updateWatchedLiteral(MRef mr, Lit lit);
+    void     checkMonomialToFalsify(MRef mr, ERef er);
     ERef     updateWatchedMonomial(ERef er, MRef mr); 
     lbool    getValueMonomial (MRef mr);
+    ERef     updateAffectedMonomials();
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
     void     considerVariable (Var v);
     void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);
     void     analyzeEquation  (ERef eq, MRef prop, Lit p);
     void     learnEquation    (vec<Lit> &out_learnt);
-    void     learnBinaryEquation(vec<Lit> &out_learnt);
     void     analyzeFinal     (Lit p, vec<Lit>& out_conflict);                         // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
     bool     litRedundant     (Lit p, uint32_t abstract_levels);                       // (helper method for 'analyze()')
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
@@ -494,6 +500,8 @@ protected:
     void     detachClausePurgatory(CRef cr, bool strict = false);
     void     attachClausePurgatory(CRef cr);
     void     removeClause     (CRef cr, bool inPurgatory = false);               // Detach and free a clause.
+    void     removeMonomial   (MRef er);                                         // Detach and free a monomial
+    void     removeEquation   (ERef er);                                         // Detach and free an equation
     bool     locked           (const Clause& c) const; // Returns TRUE if a clause is a reason for some implication in the current state.
     bool     satisfied        (const Clause& c) const; // Returns TRUE if a clause is satisfied in the current state.
 
@@ -607,7 +615,7 @@ inline void Solver::checkGarbage(double gf){
 // NOTE: enqueue does not set the ok flag! (only public methods do)
 inline bool     Solver::enqueue         (Lit p, CRef from)      { return value(p) != l_Undef ? value(p) != l_False : (uncheckedEnqueue(p, from), true); }
 inline bool     Solver::addClause       (const vec<Lit>& ps)    { ps.copyTo(add_tmp); return addClause_(add_tmp); }
-inline bool     Solver::addMonomial     (const vec<Lit>& ps, vec<Lit> &equ)    { ps.copyTo(add_tmp_monomial); return addMonomial_(add_tmp_monomial, equ); }
+inline bool     Solver::addMonomial     (const vec<Lit>& ps, vec<Lit> &equ, bool &cst)    { ps.copyTo(add_tmp_monomial); return addMonomial_(add_tmp_monomial, equ, cst); }
 inline bool     Solver::addEquation     (const vec<Lit>& ps, bool &cst)    { ps.copyTo(add_tmp_equation); return addEquation_(add_tmp_equation, cst); }
 inline bool     Solver::addEmptyClause  ()                      { add_tmp.clear(); return addClause_(add_tmp); }
 inline bool     Solver::addClause       (Lit p)                 { add_tmp.clear(); add_tmp.push(p); return addClause_(add_tmp); }
