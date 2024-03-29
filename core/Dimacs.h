@@ -53,10 +53,10 @@ static void readEquation(B& in, Solver& S, vec<Lit>& mons, bool &cst) {
                 for (; var >= S.nVars(); S.newVar());
                 lits.push((parsed_lit > 0) ? mkLit(var) : ~mkLit(var));
             }
-            S.addMonomial_(lits, mons);
+            S.addMonomial_(lits, mons, cst);
         }
         else if (*in == 'T') {
-            cst = true;
+            cst = !cst;
             ++in;
         } else {
             parsed_lit = parseInt(in);
@@ -67,7 +67,7 @@ static void readEquation(B& in, Solver& S, vec<Lit>& mons, bool &cst) {
             var = abs(parsed_lit) - 1;
             for (; var >= S.nVars(); S.newVar());
             lits.push((parsed_lit > 0) ? mkLit(var) : ~mkLit(var));
-            S.addMonomial_(lits, mons);
+            S.addMonomial_(lits, mons, cst);
         }
     }
 }
