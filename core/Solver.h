@@ -66,6 +66,10 @@ using namespace std;
 
 namespace Glucose {
 
+// #define __CONFLICT_ANALYSIS__
+// #define __VSIDS__
+// #define __RESTARTS__
+
 // Core stats 
 
 enum CoreStats {
@@ -372,8 +376,6 @@ protected:
     int                 kept = 0;
 
     // Config
-    bool                useConflictAnalysis = true;
-    bool                makeDot = false;
     int                 maxSizeLearning = 6;
     int                 maxAdded = 200;
 
@@ -396,14 +398,6 @@ protected:
     bool                remove_satisfied; // Indicates whether possibly inefficient linear scan for satisfied clauses should be performed in 'simplify'.
     vec<unsigned int>   permDiff;           // permDiff[var] contains the current conflict number... Used to count the number of  LBD
     bool                changed;
-
-    // DOT graph
-    FILE *dot;
-    string currentNodeName = "R0";
-    vector<string> stack;
-    bool skipDecisionDot;
-    bool isRoot = true;
-    int assertive = 0;
 
     // UPDATEVARACTIVITY trick (see competition'09 companion paper)
     vec<Lit> lastDecisionLevel;

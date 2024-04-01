@@ -504,9 +504,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
             for (i = 0; i < m.size(); ++i) {
                 toPropagate.push(m[i]);
                 references.push(CRef_Undef);
-                if (useConflictAnalysis) {
-                    propagators.push(CRef_Undef);
-                }
+#ifdef __CONFLICT_ANALYSIS__
+                propagators.push(CRef_Undef);
+#endif
             }
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
@@ -517,9 +517,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
         if (m.size() == 1) {
             toPropagate.push(~m[0]);
             references.push(CRef_Undef);
-            if (useConflictAnalysis) {
-                propagators.push(CRef_Undef);
-            }
+#ifdef __CONFLICT_ANALYSIS__
+            propagators.push(CRef_Undef);
+#endif
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
             references.clear();
@@ -811,25 +811,21 @@ void Solver::minimisationWithBinaryResolution(vec <Lit> &out_learnt) {
 
 void Solver::cancelUntil(int level) {
     if(decisionLevel() > level) {
-        if (makeDot) {
-            for (; (int)stack.size() > level + 1; ) {
-                    stack.pop_back();
-            }
-            backtrackDot();
-        }
-        for(int c = trail.size() - 1; c >= trail_lim[level]; c--) {
+        for(int c = trail.size() - 1; c >= trail_lim[level]; --c) {
             Var x = var(trail[c]);
             assigns[x] = l_Undef;
-            if(phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
-                polarity[x] = sign(trail[c]);
+#ifdef __CONFLICT_ANALYSIS__
+            ERef er = reason(x);
+            if (er != CRef_Undef && ea[er].learnt()) {
+                ea[er].setUsed(false);
             }
-            if (useConflictAnalysis) {
-                ERef er = reason(x);
-                if (er != CRef_Undef && ea[er].learnt()) {
-                    ea[er].setUsed(false);
-                }
+#endif
+#ifdef __VSIDS__
+            if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
+                 polarity[x] = sign(trail[c]);
             }
             insertVarOrder(x);
+#endif
         }
         qhead = trail_lim[level];
         trail.shrink(trail.size() - trail_lim[level]);
@@ -837,76 +833,25 @@ void Solver::cancelUntil(int level) {
     }
 }
 
-void Solver::assumingDot() {
-    stack.push_back(currentNodeName);
-    if (isRoot) {
-        fprintf(dot, "\t\"%s\"[label=\"%s\"]\n", currentNodeName.c_str(), currentNodeName.c_str());
-    }
-    else if (!skipDecisionDot) {
-        fprintf(dot, "\t\"%s\"[label=\"\",shape=point,color=black]\n", currentNodeName.c_str());
-    }
-    isRoot = skipDecisionDot = false;
-}
-
-void Solver::propagatingDot(Lit l)
-{
-    string newName = currentNodeName + "." + to_string(toInt(l)) + "." + to_string(assertive);
-    string color;
-    int weight;
-    if (isRoot) {
-        fprintf(dot, "\t\"%s\"[label=\"%s\"]\n", currentNodeName.c_str(), currentNodeName.c_str());
-    }
-    if (!useConflictAnalysis) {
-        if (vardata[abs(toInt(l)) >> 1].reason == CRef_Undef) {
-            if (assertive) {
-                color = "orange";
-                --assertive;
-            } else {
-                color = "blue";
-            }
-            weight = 1;
-        } else {
-            color = "green";
-            weight = 100;
-        }
-    } else {
-        if (vardata[abs(toInt(l)) >> 1].reason == CRef_Undef && decisionLevel() > 0) {
-            color = "blue";
-            weight = 1;
-        } else {
-            if (assertive) {
-                color = "orange";
-                --assertive;
-            } else {
-                color = "green";
-            }
-            weight = 100;
-        }
-    }
-    fprintf(dot, "\t\"%s\"[label=\"%d\",shape=point,color=black]\n", newName.c_str(), toLiteral(l));
-    fprintf(dot, "\t\"%s\" -- \"%s\"[label=\"%d\",fontcolor=%s,color=%s,style=bold,weight=%d]\n", currentNodeName.c_str(), newName.c_str(), toLiteral(l), color.c_str(), color.c_str(), weight);
-    currentNodeName = newName;
-    isRoot = false;
-}
-
-void Solver::conflictDot() {
-    fprintf(dot, "\t\"%s\"[label=\"conflict\",shape=box,color=red,fontcolor=black,style=filled]\n", currentNodeName.c_str());
-}
-
-void Solver::solutionDot() {
-    fprintf(dot, "\t\"%s\"[label=\"solution\",shape=box,color=green,fontcolor=black,style=filled]\n", currentNodeName.c_str());
-}
-
-void Solver::backtrackDot() {
-    fprintf(dot, "\t\"%s\" -- \"%s\"[label=\"\",color=red,style=dotted]\n", stack.back().c_str(), currentNodeName.c_str());
-    currentNodeName = stack.back();
-    stack.pop_back();
-}
 
 //=================================================================================================
 // Major methods:
 
 Lit Solver::pickBranchLit() {
+#ifdef __VSIDS__
+    Var next = var_Undef;
+    double maxi;
+    for (Var v = 0; v < nVars(); ++v) {
+        if (value(v) == l_Undef) {
+            if (next == var_Undef || activity[v] > maxi) {
+                next = v;
+                maxi = activity[v];          
+            }
+        }
+    }
+    return next == var_Undef ? lit_Undef : mkLit(next, rnd_pol ? drand(random_seed) < 0.5 : polarity[next]);
+            
+#else
     Var next = var_Undef;
     for (Var v = 0; v < nVars(); ++v) {
         if (value(v) == l_Undef) {
@@ -915,6 +860,7 @@ Lit Solver::pickBranchLit() {
         }
     }
     return next == var_Undef ? lit_Undef : mkLit(next, true);
+#endif        
 }
 
 /* Glucose heuristics
@@ -1222,6 +1168,9 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
             break;
         }
         if (present[toInt(p)]) {
+#ifdef __VSIDS__
+            varBumpActivity(var(p));
+#endif
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
@@ -1636,9 +1585,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             for (int i = 0; i < ma[other].size(); ++i) {
                 toPropagate.push(ma[other][i]);
                 references.push(er);
-                if (useConflictAnalysis) {
-                    propagators.push(other);
-                }
+#ifdef __CONFLICT_ANALYSIS__
+                propagators.push(other);
+#endif
             }
         }
         // If it has to be falsified, we can only propagate a monomial with a unique literal
@@ -1654,9 +1603,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             if (isUnit) {
                 toPropagate.push(~ma[other][w]);
                 references.push(er);
-                if (useConflictAnalysis) {
-                    propagators.push(other);
-                }
+#ifdef __CONFLICT_ANALYSIS__
+                propagators.push(other);
+#endif
             }
         }
     }
@@ -1721,17 +1670,14 @@ ERef Solver::propagate() {
         else if (value(p) == l_False) {
             return references[a];
         }
-        if (useConflictAnalysis) {
-            if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
-                ea[references[a]].setUsed(true);
-            }
-            uncheckedEnqueue(p, references[a], propagators[a]);
-        } else {
-            uncheckedEnqueue(p);
+#ifdef __CONFLICT_ANALYSIS__
+        if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
+            ea[references[a]].setUsed(true);
         }
-        if (makeDot) {
-            propagatingDot(p);
-        }
+        uncheckedEnqueue(p, references[a], propagators[a]);
+# else
+        uncheckedEnqueue(p);
+#endif
         ++propagations;
         
         // Check monomials to falsify
@@ -1870,7 +1816,6 @@ CRef Solver::propagateUnaryWatches(Lit p) {
 |    Remove half of the learnt clauses, minus the clauses locked by the current assignment. Locked
 |    clauses are clauses that are reason to some assignment. Binary clauses are never removed.
 |________________________________________________________________________________________________@*/
-
 
 void Solver::reduceDB() {
     int i, j;
@@ -2127,9 +2072,11 @@ lbool Solver::search(int nof_conflicts) {
     // unsigned int nblevels, szWithoutSelectors = 0;
     // bool blocked = false;
     bool aDecisionWasMade = false;
+    ERef confl;
 
     starts++;
 
+    /*
     // simplify
     if (useLCM && performLCM){
         //printf("###simplifyAll: %lld\n", conflicts);
@@ -2141,9 +2088,10 @@ lbool Solver::search(int nof_conflicts) {
         }
         performLCM = 0;
     }
-
+    */
 
     for(; ;) {
+        /*
         if(decisionLevel() == 0) { // We import clauses FIXME: ensure that we will import clauses enventually (restart after some point)
             parallelImportUnaryClauses();
 
@@ -2151,17 +2099,15 @@ lbool Solver::search(int nof_conflicts) {
                 return l_False;
 
         }
-        CRef confl = propagate();
+        */
+        confl = propagate();
         toPropagate.clear();
         references.clear();
-        if (useConflictAnalysis) {
-            propagators.clear();
-        }
+#ifdef __CONFLICT_ANALYSIS__
+        propagators.clear();
+#endif
 
         if(confl != CRef_Undef) {
-            if (makeDot) {    
-                conflictDot();
-            }
             newDescent = false;
             /*
             if(parallelJobIsFinished())
@@ -2214,40 +2160,30 @@ lbool Solver::search(int nof_conflicts) {
             }
             */
 
-            if (!useConflictAnalysis) {
-                // Flip the last decision
-                Lit last = trail[trail_lim.last()];
-                if (makeDot) {
-                    assertive = 1;
-                }
-                cancelUntil(decisionLevel() - 1);
-                toPropagate.push(~last);
+#ifdef __CONFLICT_ANALYSIS__
+            // Perform conflict analysis
+            learnt_clause.clear();
+            analyzeConflict(confl, learnt_clause, backtrack_level);
+            stats[sumSizes]+= learnt_clause.size();
+
+            if (learnt_clause.size() == 1) {
+                // Unary equation
+                ++stats[nbUn];
+                toPropagate.push(~learnt_clause[0]);
                 references.push(CRef_Undef);
+                propagators.push(CRef_Undef);
             } else {
-                // Perform conflict analysis
-                learnt_clause.clear();
-                analyzeConflict(confl, learnt_clause, backtrack_level);
-                stats[sumSizes]+= learnt_clause.size();
-
-                if (learnt_clause.size() == 1) {
-                    // Unary equation
-                    ++stats[nbUn];
-                    toPropagate.push(~learnt_clause[0]);
-                    references.push(CRef_Undef);
-                    propagators.push(CRef_Undef);
-                    if (makeDot) {
-                        assertive = 1;
-                    }
-                } else {
-                    learnEquation(learnt_clause);
-                    if (makeDot) {
-                        assertive = 1;
-                    }
-                }
-                cancelUntil(backtrack_level); 
+                learnEquation(learnt_clause);
             }
+            cancelUntil(backtrack_level); 
+#else
+            // Flip the last decision
+            Lit last = trail[trail_lim.last()];
+            cancelUntil(decisionLevel() - 1);
+            toPropagate.push(~last);
+            references.push(CRef_Undef);
+#endif
             
-
             /* Clause learning
             learnt_clause.clear();
             selectors.clear();
@@ -2301,6 +2237,12 @@ lbool Solver::search(int nof_conflicts) {
             */
 
         } else {
+#ifdef __RESTARTS__
+            if (nof_conflicts >= 0 && conflictC >= nof_conflicts) {
+                cancelUntil(0);
+                return l_Undef;
+            }
+#endif
             /* Glucose restart, delete comment when integrating conflict analysis
             // Our dynamic restart, see the SAT09 competition compagnion paper
             if((luby_restart && nof_conflicts <= conflictC) ||
@@ -2332,18 +2274,19 @@ lbool Solver::search(int nof_conflicts) {
             // Perform clause database reduction !
             //if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
             //   (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
-            if (useConflictAnalysis && learnts.size() >= kept + maxAdded) {
-                if(learnts.size() > 0) {
-                    curRestart = (conflicts / nbclausesbeforereduce) + 1;
-                    reduceDB();
-                    //performLCM = 1;
-                    //if(!panicModeIsEnabled())
-                    //    nbclausesbeforereduce += incReduceDB;
-                }
-            }
+#ifdef __CONFLICT_ANALYSIS__
+        if (learnts.size() >= kept + maxAdded) {
+            //curRestart = (conflicts / nbclausesbeforereduce) + 1;
+            reduceDB();
+            //performLCM = 1;
+            //if(!panicModeIsEnabled())
+            //    nbclausesbeforereduce += incReduceDB;
+        }
+#endif
 
             lastLearntClause = CRef_Undef;
             Lit next = lit_Undef;
+            /*
             while(decisionLevel() < assumptions.size()) {
                 // Perform user provided assumption:
                 Lit p = assumptions[decisionLevel()];
@@ -2358,6 +2301,7 @@ lbool Solver::search(int nof_conflicts) {
                     break;
                 }
             }
+            */
 
             if(next == lit_Undef) {
                 // New variable decision:
@@ -2375,9 +2319,6 @@ lbool Solver::search(int nof_conflicts) {
                     printf("\n");
                     printf("c last restart ## conflicts  :  %d %d \n", conflictC, decisionLevel());
                     // Model found:
-                    if (makeDot) {
-                        solutionDot();
-                    }
                     return l_True;
                 }
             }
@@ -2387,12 +2328,9 @@ lbool Solver::search(int nof_conflicts) {
             newDecisionLevel();
             toPropagate.push(next);
             references.push(CRef_Undef);
-            if (useConflictAnalysis) {
-                propagators.push(CRef_Undef);
-            }
-            if (makeDot) {
-                assumingDot();
-            }
+#ifdef __CONFLICT_ANALYSIS__
+            propagators.push(CRef_Undef);
+#endif
         }
     }
 }
@@ -2523,23 +2461,16 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     // Search:
     int curr_restarts = 0;
-    if (makeDot) {
-        dot = fopen("graph.dot", "w");
-        fprintf(dot, "graph G {\n\tordering=out\n");
-    }
+#ifdef __RESTARTS__
+    luby_restart = true;
+#endif
     
     while(status == l_Undef) {
-        skipDecisionDot = false;
-        isRoot = true;
-        
         status = search(
                 luby_restart ? luby(restart_inc, curr_restarts) * luby_restart_factor : 0); // the parameter is useless in glucose, kept to allow modifications
 
         if(!withinBudget()) break;
         curr_restarts++;
-        if (makeDot && status == l_Undef) {
-            currentNodeName = string("R") + to_string(starts);
-        }
     }
 
     if(!incremental && verbosity >= 1)
@@ -2568,9 +2499,6 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
 
     cancelUntil(0);
-    if (makeDot) {
-        fprintf(dot, "}\n");
-    }
 
     double finalTime = cpuTime();
     if(status == l_True) {
