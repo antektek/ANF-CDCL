@@ -373,11 +373,11 @@ protected:
     bool                odd;
     int                 current;
     bool                isUnit;
-    int                 kept = 0;
+    int                 kept;
 
     // Config
-    int                 maxSizeLearning = 6;
-    int                 maxAdded = 200;
+    int                 maxSizeLearning;
+    int                 maxAdded;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.

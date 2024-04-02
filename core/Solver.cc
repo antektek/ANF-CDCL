@@ -2178,10 +2178,9 @@ lbool Solver::search(int nof_conflicts) {
             cancelUntil(backtrack_level); 
 #else
             // Flip the last decision
-            Lit last = trail[trail_lim.last()];
-            cancelUntil(decisionLevel() - 1);
-            toPropagate.push(~last);
+            toPropagate.push(~trail[trail_lim.last()]);
             references.push(CRef_Undef);
+            cancelUntil(decisionLevel() - 1);
 #endif
             
             /* Clause learning
@@ -2461,6 +2460,11 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     // Search:
     int curr_restarts = 0;
+#ifdef __CONFLICT_ANALYSIS__
+    kept = 0;
+    maxSizeLearning = 6;
+    maxAdded = 200;
+#endif
 #ifdef __RESTARTS__
     luby_restart = true;
 #endif
