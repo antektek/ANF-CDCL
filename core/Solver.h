@@ -67,6 +67,7 @@ using namespace std;
 namespace Glucose {
 
 // #define __CONFLICT_ANALYSIS__
+// #define __CLEAN_DB__
 // #define __VSIDS__
 // #define __RESTARTS__
 
@@ -368,6 +369,7 @@ protected:
     vec<MRef>           propagators;
     vec<MRef>           affected;
     vec<bool>           present;
+    vec<int>            nbLearnts;
     MRef                other;
     string              code;
     bool                odd;

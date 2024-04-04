@@ -815,10 +815,12 @@ void Solver::cancelUntil(int level) {
             Var x = var(trail[c]);
             assigns[x] = l_Undef;
 #ifdef __CONFLICT_ANALYSIS__
+#ifdef __CLEAN_DB__
             ERef er = reason(x);
             if (er != CRef_Undef && ea[er].learnt()) {
                 ea[er].setUsed(false);
             }
+#endif
 #endif
 #ifdef __VSIDS__
             if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
@@ -1671,9 +1673,11 @@ ERef Solver::propagate() {
             return references[a];
         }
 #ifdef __CONFLICT_ANALYSIS__
+#ifdef __CLEAN_DB__
         if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
             ea[references[a]].setUsed(true);
         }
+#endif
         uncheckedEnqueue(p, references[a], propagators[a]);
 # else
         uncheckedEnqueue(p);
@@ -2106,7 +2110,6 @@ lbool Solver::search(int nof_conflicts) {
 #ifdef __CONFLICT_ANALYSIS__
         propagators.clear();
 #endif
-
         if(confl != CRef_Undef) {
             newDescent = false;
             /*
@@ -2166,6 +2169,12 @@ lbool Solver::search(int nof_conflicts) {
             analyzeConflict(confl, learnt_clause, backtrack_level);
             stats[sumSizes]+= learnt_clause.size();
 
+            if (learnt_clause.size() > 6) {
+                ++nbLearnts.last();
+            } else {
+                ++nbLearnts[learnt_clause.size() - 1];
+            }
+
             if (learnt_clause.size() == 1) {
                 // Unary equation
                 ++stats[nbUn];
@@ -2173,9 +2182,12 @@ lbool Solver::search(int nof_conflicts) {
                 references.push(CRef_Undef);
                 propagators.push(CRef_Undef);
             } else {
+                if (learnt_clause.size() == 2) {
+                    ++stats[nbBin];
+                }
                 learnEquation(learnt_clause);
             }
-            cancelUntil(backtrack_level); 
+            cancelUntil(backtrack_level);
 #else
             // Flip the last decision
             toPropagate.push(~trail[trail_lim.last()]);
@@ -2236,11 +2248,13 @@ lbool Solver::search(int nof_conflicts) {
             */
 
         } else {
+#ifdef __CONFLICT_ANALYSIS__
 #ifdef __RESTARTS__
             if (nof_conflicts >= 0 && conflictC >= nof_conflicts) {
                 cancelUntil(0);
                 return l_Undef;
             }
+#endif
 #endif
             /* Glucose restart, delete comment when integrating conflict analysis
             // Our dynamic restart, see the SAT09 competition compagnion paper
@@ -2274,6 +2288,7 @@ lbool Solver::search(int nof_conflicts) {
             //if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
             //   (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
 #ifdef __CONFLICT_ANALYSIS__
+#ifdef __CLEAN_DB__
         if (learnts.size() >= kept + maxAdded) {
             //curRestart = (conflicts / nbclausesbeforereduce) + 1;
             reduceDB();
@@ -2281,6 +2296,7 @@ lbool Solver::search(int nof_conflicts) {
             //if(!panicModeIsEnabled())
             //    nbclausesbeforereduce += incReduceDB;
         }
+#endif
 #endif
 
             lastLearntClause = CRef_Undef;
@@ -2461,12 +2477,17 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
     // Search:
     int curr_restarts = 0;
 #ifdef __CONFLICT_ANALYSIS__
+    for (int i = 0; i < 7; ++i) {
+        nbLearnts.push(0);
+    }
+#ifdef __CLEAN_DB__
     kept = 0;
     maxSizeLearning = 6;
     maxAdded = 200;
 #endif
 #ifdef __RESTARTS__
     luby_restart = true;
+#endif
 #endif
     
     while(status == l_Undef) {
@@ -2476,6 +2497,14 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
         if(!withinBudget()) break;
         curr_restarts++;
     }
+
+#ifdef __CONFLICT_ANALYSIS__
+    printf("nb sizes: ");
+    for (int i = 0; i < nbLearnts.size(); ++i) {
+        printf("%d ", nbLearnts[i]);
+    }
+    printf("\n");
+#endif
 
     if(!incremental && verbosity >= 1)
         printf("c =========================================================================================================\n");
