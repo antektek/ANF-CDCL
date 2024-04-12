@@ -821,6 +821,11 @@ void Solver::cancelUntil(int level) {
                 ea[er].setUsed(false);
             }
 #endif
+#ifdef __FORGET__
+            if (reason(x) != CRef_Undef && ea[reason(x)].learnt()) {
+                removeEquation(reason(x));
+            }
+#endif
 #endif
 #ifdef __VSIDS__
             if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
@@ -1173,6 +1178,11 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
 #ifdef __VSIDS__
             varBumpActivity(var(p));
 #endif
+#ifdef __CLEAN_DB__
+            if (reason(var(p)) != CRef_Undef && ea[reason(var(p))].learnt()) {
+                claBumpActivity(ea[reason(var(p))]);
+            }
+#endif
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
@@ -1217,7 +1227,9 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
     ERef er = ea.alloc(eq, true, false, true);
+#ifndef __FORGET__
     learnts.push(er);
+#endif
     attachEquation(er);
 
     // Update presence of literals
@@ -1824,19 +1836,27 @@ CRef Solver::propagateUnaryWatches(Lit p) {
 void Solver::reduceDB() {
     int i, j;
     ERef er;
-    stats[nbReduceDB]++;
+    MRef mr;
+    ++stats[nbReduceDB];
+
+    sort(learnts, reduceDB_eq(ma, ea));
+
+    int limit = learnts.size() * toDelete / 100;
 
     for (i = j = 0; i < learnts.size(); ++i) {
         er = learnts[i];
-        if (!(ea[er].getUsed()) && ma[toInt(ea[er][0])].size() > maxSizeLearning) {
-            removeEquation(learnts[i]);
-            stats[nbRemovedClauses]++;
+        mr = toInt(ea[er][0]);
+        if (!(ea[er].getUsed()) && ma[mr].size() > 2 && i < limit) {
+            removeEquation(er);
+            ++stats[nbRemovedClauses];
         } else {
+            if (ea[er].getUsed()) {
+                ++limit;
+            }
             learnts[j++] = learnts[i];
         }
     }
     learnts.shrink(i - j);
-    kept = learnts.size();
 }
 
 /*
@@ -2169,7 +2189,7 @@ lbool Solver::search(int nof_conflicts) {
             analyzeConflict(confl, learnt_clause, backtrack_level);
             stats[sumSizes]+= learnt_clause.size();
 
-            if (learnt_clause.size() > 6) {
+            if (learnt_clause.size() > 16) {
                 ++nbLearnts.last();
             } else {
                 ++nbLearnts[learnt_clause.size() - 1];
@@ -2242,11 +2262,15 @@ lbool Solver::search(int nof_conflicts) {
                 uncheckedEnqueue(learnt_clause[0], cr);
 
             }
-
-            varDecayActivity();
-            claDecayActivity();
             */
-
+#ifdef __CONFLICT_ANALYSIS__
+#ifdef __VSIDS__
+            varDecayActivity();
+#endif
+#ifdef __CLEAN_DB__
+            claDecayActivity();
+#endif
+#endif
         } else {
 #ifdef __CONFLICT_ANALYSIS__
 #ifdef __RESTARTS__
@@ -2284,18 +2308,20 @@ lbool Solver::search(int nof_conflicts) {
             }
             */
 
-            // Perform clause database reduction !
-            //if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
-            //   (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
 #ifdef __CONFLICT_ANALYSIS__
 #ifdef __CLEAN_DB__
-        if (learnts.size() >= kept + maxAdded) {
-            //curRestart = (conflicts / nbclausesbeforereduce) + 1;
-            reduceDB();
-            //performLCM = 1;
-            //if(!panicModeIsEnabled())
-            //    nbclausesbeforereduce += incReduceDB;
-        }
+            // Perform clause database reduction !
+            if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
+               (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
+
+                if (learnts.size() > 0) {
+                    curRestart = (conflicts / nbclausesbeforereduce) + 1;
+                    reduceDB();
+                    //performLCM = 1;
+                    //if(!panicModeIsEnabled())
+                    //    nbclausesbeforereduce += incReduceDB;
+                }
+            }
 #endif
 #endif
 
@@ -2477,13 +2503,11 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
     // Search:
     int curr_restarts = 0;
 #ifdef __CONFLICT_ANALYSIS__
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 17; ++i) {
         nbLearnts.push(0);
     }
 #ifdef __CLEAN_DB__
-    kept = 0;
-    maxSizeLearning = 6;
-    maxAdded = 200;
+    toDelete = 70;
 #endif
 #ifdef __RESTARTS__
     luby_restart = true;
@@ -2499,9 +2523,9 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
     }
 
 #ifdef __CONFLICT_ANALYSIS__
-    printf("nb sizes: ");
-    for (int i = 0; i < nbLearnts.size(); ++i) {
-        printf("%d ", nbLearnts[i]);
+    printf("nb sizes: %d", nbLearnts[0]);
+    for (int i = 1; i < nbLearnts.size(); ++i) {
+        printf("/%d", nbLearnts[i]);
     }
     printf("\n");
 #endif

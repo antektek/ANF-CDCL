@@ -70,6 +70,7 @@ namespace Glucose {
 // #define __CLEAN_DB__
 // #define __VSIDS__
 // #define __RESTARTS__
+// #define __FORGET__
 
 // Core stats 
 
@@ -375,11 +376,7 @@ protected:
     bool                odd;
     int                 current;
     bool                isUnit;
-    int                 kept;
-
-    // Config
-    int                 maxSizeLearning;
-    int                 maxAdded;
+    int                 toDelete;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
@@ -600,7 +597,8 @@ inline void Solver::claBumpActivity (Clause& c) {
         if ( (c.activity() += cla_inc) > 1e20 ) {
             // Rescale:
             for (int i = 0; i < learnts.size(); i++)
-                ca[learnts[i]].activity() *= 1e-20;
+                // ca[learnts[i]].activity() *= 1e-20;
+                ea[learnts[i]].activity() *= 1e-20;
             cla_inc *= 1e-20; } }
 
 inline void Solver::checkGarbage(void){ return checkGarbage(garbage_frac); }
@@ -812,6 +810,24 @@ struct reduceDB_lt {
     }
 };
 
+struct reduceDB_eq {
+    ClauseAllocator &ma;
+    ClauseAllocator &ea;
+
+    reduceDB_eq(ClauseAllocator &ma_, ClauseAllocator &ea_) : ma(ma_), ea(ea_) {}
+
+    bool operator()(ERef x, ERef y) {
+        MRef mx = toInt(ea[x][0]), my = toInt(ea[y][0]);
+
+        if (ma[mx].size() > 2 && ma[my].size() == 2) return 1;
+
+        if (ma[my].size() > 2 && ma[mx].size() == 2) return 0;
+        if (ma[mx].size() == 2 && ma[my].size() == 2) return 0;
+
+        return ea[x].activity() < ea[y].activity();
+        // return ma[mx].size() < ma[my].size();
+    }
+};
 
 }
 
