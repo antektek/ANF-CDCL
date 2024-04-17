@@ -286,7 +286,8 @@ public:
     void setUsed(bool b) { header.used = b; }
     int getWatch1() { return header.watch[0]; }
     int getWatch2() { return header.watch[1]; }
-    void setWatches(int w1, int w2 = -1) { header.watch[0] = w1; header.watch[1] = w2; }
+    void setWatch1(int w1) { header.watch[0] = w1; }
+    void setWatches(int w1, int w2) { header.watch[0] = w1; header.watch[1] = w2; }
 
     // simplify
     //

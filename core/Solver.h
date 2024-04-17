@@ -66,7 +66,6 @@ using namespace std;
 
 namespace Glucose {
 
-// #define __CONFLICT_ANALYSIS__
 // #define __CLEAN_DB__
 // #define __VSIDS__
 // #define __RESTARTS__
@@ -217,6 +216,11 @@ public:
     int       verbosity;
     int       verbEveryConflicts;
     int       showModel;
+    bool      conflictAnalysis;
+    bool      cleanDB;
+    bool      VSIDS;
+    bool      restarts;
+    bool      forget;
 
     // Constants For restarts
     double    K;
@@ -236,6 +240,8 @@ public:
     unsigned int lbLBDMinimizingClause;
     bool useLCM; // See ijcai17 (Chu Min Li paper, related to vivif).
     bool LCMUpdateLBD; // Updates the LBD when shrinking/replacing a clause with the vivification
+    int          nConflicts;
+    int          maxSizeLearning;
 
     // Constant for heuristic
     double    var_decay;
@@ -371,12 +377,16 @@ protected:
     vec<MRef>           affected;
     vec<bool>           present;
     vec<int>            nbLearnts;
+    vec<int>            nbLBD;
+    vec<int>            meanLBD;
+    vec<bool>           foundLevel;
     MRef                other;
     string              code;
     bool                odd;
     int                 current;
     bool                isUnit;
-    int                 toDelete;
+    int                 cptConflicts;
+    int                 lbd;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
@@ -486,8 +496,9 @@ protected:
     // Operations on clauses:
     //
     void     attachClause     (CRef cr);               // Attach a clause to watcher lists.
-    MRef     allocateMonomial (vec<Lit> &m, bool learnt, bool attach);
+    MRef     allocateMonomial (vec<Lit> &m, bool learnt);
     inline void     attachMonomial   (MRef mr);               // Attach a monomial to watcher lists.
+    inline void     attachUnitEquation(ERef er);              // Attach a unit equation to watcher lists
     void     attachEquation   (ERef er);               // Attach an equation to watcher lists.
     void     detachClause     (CRef cr, bool strict = false); // Detach a clause to watcher lists.
     void     detachClausePurgatory(CRef cr, bool strict = false);

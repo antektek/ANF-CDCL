@@ -89,6 +89,8 @@ static IntOption opt_lb_lbd_frozen_clause(_cred, "minLBDFrozenClause", "Protect 
 static BoolOption opt_chanseok_hack(_cred, "chanseok",
                                     "Use Chanseok Oh strategy for LBD (keep all LBD<=co and remove half of firstreduceDB other learnt clauses", false);
 static IntOption opt_chanseok_limit(_cred, "co", "Chanseok Oh: all learnt clauses with LBD<=co are permanent", 5, IntRange(2, INT32_MAX));
+static IntOption opt_nConflicts(_cred, "nConflicts", "Number of conflicts before cleaning", 100, IntRange(1, INT32_MAX));
+static IntOption opt_maxSizeLearning(_cred, "maxSizeLearning", "Max size of clauses to learn", 6, IntRange(2, INT32_MAX));
 
 
 static IntOption opt_lb_size_minimzing_clause(_cm, "minSizeMinimizingClause", "The min size required to minimize clause", 30, IntRange(3, INT32_MAX));
@@ -120,6 +122,11 @@ static BoolOption opt_fixed_randomize_phase_on_restarts(_cat, "fix-phas-rest", "
 static BoolOption opt_adapt(_cat, "adapt", "Adapt dynamically stategies after 100000 conflicts", true);
 
 static BoolOption opt_forceunsat(_cat,"forceunsat","Force the phase for UNSAT",true);
+static BoolOption opt_conflictAnalysis(_cat, "conflictAnalysis", "Enable conflict analysis", false);
+static BoolOption opt_cleanDB(_cat, "cleanDB", "Remove learnt equations", false);
+static BoolOption opt_VSIDS(_cat, "VSIDS", "Use VSIDS heuristics", false);
+static BoolOption opt_restarts(_cat, "restarts", "Use restarts", false);
+static BoolOption opt_forget(_cat, "forget", "Do not learn", false);
 //=================================================================================================
 // Constructor/Destructor:
 
@@ -143,6 +150,13 @@ verbosity(0)
 , lbLBDMinimizingClause(opt_lb_lbd_minimzing_clause)
 , useLCM(opt_lcm)
 , LCMUpdateLBD (opt_lcm_update_lbd)
+, nConflicts(opt_nConflicts)
+, maxSizeLearning(opt_maxSizeLearning)
+, conflictAnalysis(opt_conflictAnalysis)
+, cleanDB(opt_cleanDB)
+, VSIDS(opt_VSIDS)
+, restarts(opt_restarts)
+, forget(opt_forget)
 , var_decay(opt_var_decay)
 , max_var_decay(opt_max_var_decay)
 , clause_decay(opt_clause_decay)
@@ -233,6 +247,13 @@ Solver::Solver(const Solver &s) :
 , lbLBDMinimizingClause(s.lbLBDMinimizingClause)
 , useLCM(s.useLCM)
 , LCMUpdateLBD (s.LCMUpdateLBD)
+, nConflicts(s.nConflicts)
+, maxSizeLearning(s.maxSizeLearning)
+, conflictAnalysis(s.conflictAnalysis)
+, cleanDB(s.cleanDB)
+, VSIDS(s.VSIDS)
+, restarts(s.restarts)
+, forget(s.forget)
 , var_decay(s.var_decay)
 , max_var_decay(s.max_var_decay)
 , clause_decay(s.clause_decay)
@@ -420,7 +441,7 @@ Var Solver::newVar(bool sign, bool dvar) {
 }
 
 
-MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
+MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt) {
     MRef mr;
     if (createdMonomials.count(code)) {
         // The monomial already exists
@@ -438,9 +459,7 @@ MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt, bool attach) {
         }
 
         // Create watched literals
-        if (attach) {
-            attachMonomial(mr);
-        }
+        attachMonomial(mr);
     }
     return mr;
 }
@@ -474,7 +493,7 @@ bool Solver::addMonomial_(vec<Lit> &ps, vec<Lit> &equ, bool &cst) {
         cst = !cst;
         return true;
     }
-    MRef mr = allocateMonomial(ps, false, true);
+    MRef mr = allocateMonomial(ps, false);
     equ.push(mkLit(mr >> 1, mr & 1));
     return true;
 }
@@ -504,9 +523,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
             for (i = 0; i < m.size(); ++i) {
                 toPropagate.push(m[i]);
                 references.push(CRef_Undef);
-#ifdef __CONFLICT_ANALYSIS__
-                propagators.push(CRef_Undef);
-#endif
+                if (conflictAnalysis) {
+                    propagators.push(CRef_Undef);
+                }
             }
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
@@ -517,22 +536,22 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
         if (m.size() == 1) {
             toPropagate.push(~m[0]);
             references.push(CRef_Undef);
-#ifdef __CONFLICT_ANALYSIS__
-            propagators.push(CRef_Undef);
-#endif
+            if (conflictAnalysis) {
+                propagators.push(CRef_Undef);
+            }
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
             references.clear();
             propagators.clear();
             return ok;
         }
+        er = ea.alloc(ps, false, false, cst);
+        equations.push(er);
+        attachUnitEquation(er);
         for (int i = 0; i < m.size(); ++i) {
-            er = ea.alloc(ps, false, false, cst);
-            equations.push(er);
-            attachEquation(er);
             toFalsify[toInt(m[i])].push(make_pair(toInt(ps[0]), er));
-            return true;
         }
+        return true;
     }
     // Create the equation
     er = ea.alloc(ps, false, false, cst);
@@ -596,15 +615,14 @@ inline void Solver::attachMonomial(MRef mr) {
     watchedLiterals[ma[mr][0]].push(Watcher(mr, ma[mr][0]));
 }
 
+inline void Solver::attachUnitEquation(ERef er) {
+    watchedMonomials[ea[er][0]].push(Watcher(er, ea[er][0]));
+}
 
 void Solver::attachEquation(ERef er) {
     const Clause &e = ea[er];
-    if (e.size() == 1) {
-        watchedMonomials[e[0]].push(Watcher(er, e[0]));
-    } else {
-        watchedMonomials[e[0]].push(Watcher(er, e[0]));
-        watchedMonomials[e[1]].push(Watcher(er, e[1]));
-    }
+    watchedMonomials[e[0]].push(Watcher(er, e[0]));
+    watchedMonomials[e[1]].push(Watcher(er, e[1]));
 }
 
 
@@ -814,25 +832,25 @@ void Solver::cancelUntil(int level) {
         for(int c = trail.size() - 1; c >= trail_lim[level]; --c) {
             Var x = var(trail[c]);
             assigns[x] = l_Undef;
-#ifdef __CONFLICT_ANALYSIS__
-#ifdef __CLEAN_DB__
-            ERef er = reason(x);
-            if (er != CRef_Undef && ea[er].learnt()) {
-                ea[er].setUsed(false);
+            if (conflictAnalysis) {
+                if (cleanDB) {
+                    ERef er = reason(x);
+                    if (er != CRef_Undef && ea[er].learnt()) {
+                        ea[er].setUsed(false);
+                    }
+                }
+                if (forget) {
+                    if (reason(x) != CRef_Undef && ea[reason(x)].learnt()) {
+                        removeEquation(reason(x));
+                    }
+                }
+                if (VSIDS) {
+                    if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
+                        polarity[x] = sign(trail[c]);
+                    }
+                    insertVarOrder(x);
+                }
             }
-#endif
-#ifdef __FORGET__
-            if (reason(x) != CRef_Undef && ea[reason(x)].learnt()) {
-                removeEquation(reason(x));
-            }
-#endif
-#endif
-#ifdef __VSIDS__
-            if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
-                 polarity[x] = sign(trail[c]);
-            }
-            insertVarOrder(x);
-#endif
         }
         qhead = trail_lim[level];
         trail.shrink(trail.size() - trail_lim[level]);
@@ -845,29 +863,28 @@ void Solver::cancelUntil(int level) {
 // Major methods:
 
 Lit Solver::pickBranchLit() {
-#ifdef __VSIDS__
-    Var next = var_Undef;
-    double maxi;
-    for (Var v = 0; v < nVars(); ++v) {
-        if (value(v) == l_Undef) {
-            if (next == var_Undef || activity[v] > maxi) {
-                next = v;
-                maxi = activity[v];          
+    if (VSIDS) {
+        Var next = var_Undef;
+        double maxi;
+        for (Var v = 0; v < nVars(); ++v) {
+            if (value(v) == l_Undef) {
+                if (next == var_Undef || activity[v] > maxi) {
+                    next = v;
+                    maxi = activity[v];          
+                }
             }
         }
-    }
-    return next == var_Undef ? lit_Undef : mkLit(next, rnd_pol ? drand(random_seed) < 0.5 : polarity[next]);
-            
-#else
-    Var next = var_Undef;
-    for (Var v = 0; v < nVars(); ++v) {
-        if (value(v) == l_Undef) {
-            next = v;
-            break;
+        return next == var_Undef ? lit_Undef : mkLit(next, rnd_pol ? drand(random_seed) < 0.5 : polarity[next]);
+    } else {    
+        Var next = var_Undef;
+        for (Var v = 0; v < nVars(); ++v) {
+            if (value(v) == l_Undef) {
+                next = v;
+                break;
+            }
         }
+        return next == var_Undef ? lit_Undef : mkLit(next, true);
     }
-    return next == var_Undef ? lit_Undef : mkLit(next, true);
-#endif        
 }
 
 /* Glucose heuristics
@@ -1166,6 +1183,7 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     Lit p;
     current = 0;
     out_btlevel = 0;
+    ++cptConflicts;
     // Consider the conflict
     analyzeEquation(confl, CRef_Undef, lit_Undef);
     // Get back in the trail and consider the reasons
@@ -1175,14 +1193,11 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
             break;
         }
         if (present[toInt(p)]) {
-#ifdef __VSIDS__
+            // Bump activities
             varBumpActivity(var(p));
-#endif
-#ifdef __CLEAN_DB__
             if (reason(var(p)) != CRef_Undef && ea[reason(var(p))].learnt()) {
                 claBumpActivity(ea[reason(var(p))]);
             }
-#endif
             // Do not consider the same equation several times
             if (reason(var(p)) != prev) {
                 prev = reason(var(p));
@@ -1196,6 +1211,10 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
         }
     }
 
+    // Initialize structures to compute LBD
+    lbd = 0;
+    for (int i = 0; i < foundLevel.size(); foundLevel[i++] = false);
+
     // Get the literals still present
     out_learnt.push();
     for (int i = 0; i < present.size(); ++i) {
@@ -1208,6 +1227,11 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
                     if (level(i >> 1) > out_btlevel) {
                         out_btlevel = level(i >> 1);
                     }
+                }
+                // Update LBD
+                if (!foundLevel[level(i >> 1)]) {
+                    ++lbd;
+                    foundLevel[level(i >> 1)] = true;
                 }
             }
             present[i] = false;
@@ -1227,10 +1251,10 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
     ERef er = ea.alloc(eq, true, false, true);
-#ifndef __FORGET__
-    learnts.push(er);
-#endif
-    attachEquation(er);
+    if (!forget) {
+        learnts.push(er);
+    }
+    attachUnitEquation(er);
 
     // Update presence of literals
     for (int i = 0; i < out_learnt.size(); ++i) {
@@ -1242,6 +1266,9 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     toPropagate.push(~out_learnt[0]);
     references.push(er);
     propagators.push(mr);
+
+    // LBD
+    ea[er].setLBD(lbd);
 }
 
 
@@ -1495,7 +1522,7 @@ void Solver::forceWatchedLiteral(MRef mr, Lit lit, int idx) {
         }
         // Update the new watched literal
         watchedLiterals[~lit].push(Watcher(mr, ~lit));
-        m.setWatches(idx);
+        m.setWatch1(idx);
     }
 }
 
@@ -1517,7 +1544,7 @@ void Solver::checkMonomialToFalsify(MRef mr, ERef er) {
                         }
                     } 
                     watchedLiterals[m[i]].push(Watcher(mr, m[i]));
-                    m.setWatches(i);
+                    m.setWatch1(i);
                     w = i;
                 }
             }
@@ -1535,7 +1562,7 @@ bool Solver::updateWatchedLiteral(MRef mr, Lit lit) {
         if (value(m[i]) == l_Undef) {
             // Update the watched literal
             watchedLiterals[m[i]].push(Watcher(mr, m[i]));
-            m.setWatches(i);
+            m.setWatch1(i);
             return false;
         }
     }
@@ -1599,9 +1626,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             for (int i = 0; i < ma[other].size(); ++i) {
                 toPropagate.push(ma[other][i]);
                 references.push(er);
-#ifdef __CONFLICT_ANALYSIS__
-                propagators.push(other);
-#endif
+                if (conflictAnalysis) {
+                    propagators.push(other);
+                }
             }
         }
         // If it has to be falsified, we can only propagate a monomial with a unique literal
@@ -1617,9 +1644,9 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
             if (isUnit) {
                 toPropagate.push(~ma[other][w]);
                 references.push(er);
-#ifdef __CONFLICT_ANALYSIS__
-                propagators.push(other);
-#endif
+                if (conflictAnalysis) {
+                    propagators.push(other);
+                }
             }
         }
     }
@@ -1684,16 +1711,16 @@ ERef Solver::propagate() {
         else if (value(p) == l_False) {
             return references[a];
         }
-#ifdef __CONFLICT_ANALYSIS__
-#ifdef __CLEAN_DB__
-        if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
-            ea[references[a]].setUsed(true);
+        if (conflictAnalysis) {
+            if (cleanDB) {
+                if (references[a] != CRef_Undef && ea[references[a]].learnt()) {
+                    ea[references[a]].setUsed(true);
+                }
+            }
+            uncheckedEnqueue(p, references[a], propagators[a]);
+        } else {
+            uncheckedEnqueue(p);
         }
-#endif
-        uncheckedEnqueue(p, references[a], propagators[a]);
-# else
-        uncheckedEnqueue(p);
-#endif
         ++propagations;
         
         // Check monomials to falsify
@@ -1839,20 +1866,13 @@ void Solver::reduceDB() {
     MRef mr;
     ++stats[nbReduceDB];
 
-    sort(learnts, reduceDB_eq(ma, ea));
-
-    int limit = learnts.size() * toDelete / 100;
-
     for (i = j = 0; i < learnts.size(); ++i) {
         er = learnts[i];
         mr = toInt(ea[er][0]);
-        if (!(ea[er].getUsed()) && ma[mr].size() > 2 && i < limit) {
+        if (!(ea[er].getUsed()) && ma[mr].size() > maxSizeLearning) {
             removeEquation(er);
             ++stats[nbRemovedClauses];
         } else {
-            if (ea[er].getUsed()) {
-                ++limit;
-            }
             learnts[j++] = learnts[i];
         }
     }
@@ -2127,9 +2147,9 @@ lbool Solver::search(int nof_conflicts) {
         confl = propagate();
         toPropagate.clear();
         references.clear();
-#ifdef __CONFLICT_ANALYSIS__
-        propagators.clear();
-#endif
+        if (conflictAnalysis) {
+            propagators.clear();
+        }
         if(confl != CRef_Undef) {
             newDescent = false;
             /*
@@ -2183,37 +2203,40 @@ lbool Solver::search(int nof_conflicts) {
             }
             */
 
-#ifdef __CONFLICT_ANALYSIS__
-            // Perform conflict analysis
-            learnt_clause.clear();
-            analyzeConflict(confl, learnt_clause, backtrack_level);
-            stats[sumSizes]+= learnt_clause.size();
+            if (conflictAnalysis) {
+                // Perform conflict analysis
+                learnt_clause.clear();
+                analyzeConflict(confl, learnt_clause, backtrack_level);
+                stats[sumSizes]+= learnt_clause.size();
 
-            if (learnt_clause.size() > 16) {
-                ++nbLearnts.last();
-            } else {
-                ++nbLearnts[learnt_clause.size() - 1];
-            }
-
-            if (learnt_clause.size() == 1) {
-                // Unary equation
-                ++stats[nbUn];
-                toPropagate.push(~learnt_clause[0]);
-                references.push(CRef_Undef);
-                propagators.push(CRef_Undef);
-            } else {
-                if (learnt_clause.size() == 2) {
-                    ++stats[nbBin];
+                if (learnt_clause.size() > 16) {
+                    ++nbLearnts.last();
+                    meanLBD.last() += lbd;
+                } else {
+                    ++nbLearnts[learnt_clause.size() - 1];
+                    meanLBD[learnt_clause.size() - 1] += lbd;
                 }
-                learnEquation(learnt_clause);
+                ++nbLBD[lbd - 1];
+
+                if (learnt_clause.size() == 1) {
+                    // Unary equation
+                    ++stats[nbUn];
+                    toPropagate.push(~learnt_clause[0]);
+                    references.push(CRef_Undef);
+                    propagators.push(CRef_Undef);
+                } else {
+                    if (learnt_clause.size() == 2) {
+                        ++stats[nbBin];
+                    }
+                    learnEquation(learnt_clause);
+                }
+                cancelUntil(backtrack_level);
+            } else {
+                // Flip the last decision
+                toPropagate.push(~trail[trail_lim.last()]);
+                references.push(CRef_Undef);
+                cancelUntil(decisionLevel() - 1);
             }
-            cancelUntil(backtrack_level);
-#else
-            // Flip the last decision
-            toPropagate.push(~trail[trail_lim.last()]);
-            references.push(CRef_Undef);
-            cancelUntil(decisionLevel() - 1);
-#endif
             
             /* Clause learning
             learnt_clause.clear();
@@ -2263,23 +2286,17 @@ lbool Solver::search(int nof_conflicts) {
 
             }
             */
-#ifdef __CONFLICT_ANALYSIS__
-#ifdef __VSIDS__
-            varDecayActivity();
-#endif
-#ifdef __CLEAN_DB__
-            claDecayActivity();
-#endif
-#endif
-        } else {
-#ifdef __CONFLICT_ANALYSIS__
-#ifdef __RESTARTS__
-            if (nof_conflicts >= 0 && conflictC >= nof_conflicts) {
-                cancelUntil(0);
-                return l_Undef;
+            if (conflictAnalysis) { 
+                varDecayActivity();
+                claDecayActivity();
             }
-#endif
-#endif
+        } else {
+            if (conflictAnalysis && restarts) {
+                if (nof_conflicts >= 0 && conflictC >= nof_conflicts) {
+                    cancelUntil(0);
+                    return l_Undef;
+                }
+            }
             /* Glucose restart, delete comment when integrating conflict analysis
             // Our dynamic restart, see the SAT09 competition compagnion paper
             if((luby_restart && nof_conflicts <= conflictC) ||
@@ -2308,22 +2325,26 @@ lbool Solver::search(int nof_conflicts) {
             }
             */
 
-#ifdef __CONFLICT_ANALYSIS__
-#ifdef __CLEAN_DB__
-            // Perform clause database reduction !
-            if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
-               (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
-
-                if (learnts.size() > 0) {
-                    curRestart = (conflicts / nbclausesbeforereduce) + 1;
+            if (conflictAnalysis && cleanDB) {
+                if (cptConflicts >= nConflicts) {
+                    cptConflicts = 0;
                     reduceDB();
-                    //performLCM = 1;
-                    //if(!panicModeIsEnabled())
-                    //    nbclausesbeforereduce += incReduceDB;
                 }
+                /*
+                // Perform clause database reduction !
+                if((chanseokStrategy && !glureduce && learnts.size() > firstReduceDB) ||
+                    (glureduce && conflicts >= ((unsigned int) curRestart * nbclausesbeforereduce))) {
+
+                    if (learnts.size() > 0) {
+                        curRestart = (conflicts / nbclausesbeforereduce) + 1;
+                        reduceDB();
+                        //performLCM = 1;
+                        //if(!panicModeIsEnabled())
+                        //    nbclausesbeforereduce += incReduceDB;
+                    }
+                }
+                */
             }
-#endif
-#endif
 
             lastLearntClause = CRef_Undef;
             Lit next = lit_Undef;
@@ -2369,9 +2390,9 @@ lbool Solver::search(int nof_conflicts) {
             newDecisionLevel();
             toPropagate.push(next);
             references.push(CRef_Undef);
-#ifdef __CONFLICT_ANALYSIS__
-            propagators.push(CRef_Undef);
-#endif
+            if (conflictAnalysis) {
+                propagators.push(CRef_Undef);
+            }
         }
     }
 }
@@ -2502,17 +2523,22 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
 
     // Search:
     int curr_restarts = 0;
-#ifdef __CONFLICT_ANALYSIS__
-    for (int i = 0; i < 17; ++i) {
-        nbLearnts.push(0);
+    if (conflictAnalysis) {
+        for (int i = 0; i < 17; ++i) {
+            nbLearnts.push(0);
+            meanLBD.push(0);
+        }
+        for (int i = 0; i <= nVars(); ++i) {
+            nbLBD.push(0);
+            foundLevel.push(0);
+        }
+        if (cleanDB) {
+            cptConflicts = 0;
+        }
+        if (restarts) {
+            luby_restart = true;
+        }
     }
-#ifdef __CLEAN_DB__
-    toDelete = 70;
-#endif
-#ifdef __RESTARTS__
-    luby_restart = true;
-#endif
-#endif
     
     while(status == l_Undef) {
         status = search(
@@ -2522,13 +2548,25 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
         curr_restarts++;
     }
 
-#ifdef __CONFLICT_ANALYSIS__
-    printf("nb sizes: %d", nbLearnts[0]);
-    for (int i = 1; i < nbLearnts.size(); ++i) {
-        printf("/%d", nbLearnts[i]);
+    if (conflictAnalysis) {
+        printf("c nb sizes: ");
+        for (int i = 0; i < nbLearnts.size(); ++i) {
+            printf("%d/", nbLearnts[i]);
+        }
+        printf("\nc nb lbd: ");
+        for (int i = 0; i < nbLBD.size(); ++i) {
+            printf("%d/", nbLBD[i]);
+        }
+        printf("\nc mean lbd: ");
+        for (int i = 0; i < meanLBD.size(); ++i) {
+            if (nbLearnts[i] == 0) {
+                printf("0/");
+            } else {
+                printf("%d/", meanLBD[i] / nbLearnts[i]);
+            }
+        }
+        printf("\n");
     }
-    printf("\n");
-#endif
 
     if(!incremental && verbosity >= 1)
         printf("c =========================================================================================================\n");
