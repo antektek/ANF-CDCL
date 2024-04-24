@@ -221,6 +221,7 @@ public:
     bool      VSIDS;
     bool      restarts;
     bool      forget;
+    bool      checkModel;
 
     // Constants For restarts
     double    K;
@@ -470,6 +471,7 @@ protected:
     lbool    getValueMonomial (MRef mr);
     ERef     updateAffectedMonomials();
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
+    bool     checkSolution    ();
     // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
     void     considerVariable (Var v);
     void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);

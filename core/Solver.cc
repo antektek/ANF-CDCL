@@ -127,6 +127,7 @@ static BoolOption opt_cleanDB(_cat, "cleanDB", "Remove learnt equations", false)
 static BoolOption opt_VSIDS(_cat, "VSIDS", "Use VSIDS heuristics", false);
 static BoolOption opt_restarts(_cat, "restarts", "Use restarts", false);
 static BoolOption opt_forget(_cat, "forget", "Do not learn", false);
+static BoolOption opt_checkModel(_cat, "checkModel", "Check if the model found is correct", false);
 //=================================================================================================
 // Constructor/Destructor:
 
@@ -136,6 +137,12 @@ Solver::Solver() :
 //
 verbosity(0)
 , showModel(0)
+, conflictAnalysis(opt_conflictAnalysis)
+, cleanDB(opt_cleanDB)
+, VSIDS(opt_VSIDS)
+, restarts(opt_restarts)
+, forget(opt_forget)
+, checkModel(opt_checkModel)
 , K(opt_K)
 , R(opt_R)
 , sizeLBDQueue(opt_size_lbd_queue)
@@ -152,11 +159,6 @@ verbosity(0)
 , LCMUpdateLBD (opt_lcm_update_lbd)
 , nConflicts(opt_nConflicts)
 , maxSizeLearning(opt_maxSizeLearning)
-, conflictAnalysis(opt_conflictAnalysis)
-, cleanDB(opt_cleanDB)
-, VSIDS(opt_VSIDS)
-, restarts(opt_restarts)
-, forget(opt_forget)
 , var_decay(opt_var_decay)
 , max_var_decay(opt_max_var_decay)
 , clause_decay(opt_clause_decay)
@@ -174,7 +176,7 @@ verbosity(0)
 , panicModeLastRemoved(0), panicModeLastRemovedShared(0)
 , useUnaryWatched(false)
 , promoteOneWatchedClause(true)
-,solves(0),starts(0),decisions(0),propagations(0),conflicts(0),conflictsRestarts(0)
+, solves(0),starts(0),decisions(0),propagations(0),conflicts(0),conflictsRestarts(0)
 , curRestart(1)
 , glureduce(opt_glu_reduction)
 , restart_inc(opt_restart_inc)
@@ -233,6 +235,12 @@ verbosity(0)
 Solver::Solver(const Solver &s) :
   verbosity(s.verbosity)
 , showModel(s.showModel)
+, conflictAnalysis(s.conflictAnalysis)
+, cleanDB(s.cleanDB)
+, VSIDS(s.VSIDS)
+, restarts(s.restarts)
+, forget(s.forget)
+, checkModel(s.checkModel)
 , K(s.K)
 , R(s.R)
 , sizeLBDQueue(s.sizeLBDQueue)
@@ -249,11 +257,6 @@ Solver::Solver(const Solver &s) :
 , LCMUpdateLBD (s.LCMUpdateLBD)
 , nConflicts(s.nConflicts)
 , maxSizeLearning(s.maxSizeLearning)
-, conflictAnalysis(s.conflictAnalysis)
-, cleanDB(s.cleanDB)
-, VSIDS(s.VSIDS)
-, restarts(s.restarts)
-, forget(s.forget)
 , var_decay(s.var_decay)
 , max_var_decay(s.max_var_decay)
 , clause_decay(s.clause_decay)
@@ -299,7 +302,7 @@ Solver::Solver(const Solver &s) :
 , order_heap(VarOrderLt(activity))
 , progress_estimate(s.progress_estimate)
 , remove_satisfied(s.remove_satisfied)
-,lastLearntClause(CRef_Undef)
+, lastLearntClause(CRef_Undef)
 // Resource constraints:
 //
 , conflict_budget(s.conflict_budget)
@@ -840,8 +843,10 @@ void Solver::cancelUntil(int level) {
                     }
                 }
                 if (forget) {
-                    if (reason(x) != CRef_Undef && ea[reason(x)].learnt()) {
-                        removeEquation(reason(x));
+                    ERef er = reason(x);
+                    if (er != CRef_Undef && ea[er].learnt()) {
+                        ma.free(toInt(ea[er][0]));
+                        ea.free(er);
                     }
                 }
                 if (VSIDS) {
@@ -856,6 +861,32 @@ void Solver::cancelUntil(int level) {
         trail.shrink(trail.size() - trail_lim[level]);
         trail_lim.shrink(trail_lim.size() - level);
     }
+}
+
+bool Solver::checkSolution() {
+    for (int i = 0; i < equations.size(); ++i) {
+        Clause &e = ea[equations[i]];
+        bool ok = e.constante();
+        for (int j = 0; j < e.size(); ++j) {
+            lbool val = getValueMonomial(toInt(e[j]));
+            if (val == l_Undef) {
+                return false;
+            }
+            if (val == l_True) {
+                ok = !ok;
+                Clause &m = ma[toInt(e[j])];
+                for (int k = 0; k < m.size(); ++k) {
+                    if (value(m[k]) == l_False) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
 }
 
 
@@ -1242,24 +1273,28 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
 
 void Solver::learnEquation(vec<Lit> &out_learnt) {
     vec<Lit> eq;
+    // Create the monomial
     MRef mr = ma.alloc(out_learnt, true);
-    attachMonomial(mr);
-
+    
     watchedMonomials.init(mkLit(mr >> 1, false));
     watchedMonomials.init(mkLit(mr >> 1, true));
 
     // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
     ERef er = ea.alloc(eq, true, false, true);
+    
     if (!forget) {
         learnts.push(er);
-    }
-    attachUnitEquation(er);
-
-    // Update presence of literals
-    for (int i = 0; i < out_learnt.size(); ++i) {
-        presenceLiterals[toInt(out_learnt[i])].push(make_pair(mr, i));
-        toFalsify[toInt(out_learnt[i])].push(make_pair(mr, er));
+        
+        // Create watched literals and watched monomials
+        attachMonomial(mr);
+        attachUnitEquation(er);
+    
+        // Update presence of literals
+        for (int i = 0; i < out_learnt.size(); ++i) {
+            presenceLiterals[toInt(out_learnt[i])].push(make_pair(mr, i));
+            toFalsify[toInt(out_learnt[i])].push(make_pair(mr, er));
+        }
     }
 
     // Propagation
@@ -1578,7 +1613,6 @@ lbool Solver::getValueMonomial(MRef mr) {
 ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
     Clause &e = ea[er];
     lbool val;
-    Lit lit;
 
     changed = false;
     if (e.size() == 1) {
@@ -1654,7 +1688,7 @@ ERef Solver::updateWatchedMonomial(ERef er, MRef mr) {
 }
 
 ERef Solver::updateAffectedMonomials() {
-    int i, j, k;
+    int j, k;
     MRef mr;
     ERef confl;
     for (int i = 0; i < affected.size(); ++i) {
@@ -2370,6 +2404,10 @@ lbool Solver::search(int nof_conflicts) {
                 decisions++;
                 next = pickBranchLit();
                 if(next == lit_Undef) {
+                    if (checkModel && !checkSolution()) {
+                        printf("Error: Something went wrong\n");
+                        exit(0);
+                    }
                     printf("s ");
                     for (Var v = 0; v < nVars(); ++v) {
                         if (value(v) == l_False) {

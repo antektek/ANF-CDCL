@@ -59,10 +59,11 @@ void Glucose::setHelpPrefixStr  (const char* str){ Option::getHelpPrefixString()
 void Glucose::printUsageAndExit (int argc, char** argv, bool verbose)
 {
     const char* usage = Option::getUsageString();
-    if (usage != NULL)
+    if (usage != NULL) {
         fprintf(stderr, usage, argv[0]);
+    }
 
-        sort(Option::getOptionList(), Option::OptionLt());
+    sort(Option::getOptionList(), Option::OptionLt());
 
     const char* prev_cat  = NULL;
     const char* prev_type = NULL;

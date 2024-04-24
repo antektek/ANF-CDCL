@@ -268,8 +268,8 @@ void Solver::simplifyLearnt(Clause& c)
     falseLit.clear();
 
     bool True_confl = false;
-    int beforeSize, afterSize;
-    beforeSize = c.size();
+    // int beforeSize, afterSize;
+    // beforeSize = c.size();
     int i, j;
     CRef confl;
 
@@ -299,7 +299,7 @@ void Solver::simplifyLearnt(Clause& c)
     }
     c.shrink(c.size() - j);
     if (LCMUpdateLBD && c.lbd() > c.size()) c.setLBD(c.size());
-    afterSize = c.size();
+    // afterSize = c.size();
 
     if (confl != CRef_Undef || True_confl == true){
         simp_learnt_clause.clear();
@@ -339,7 +339,7 @@ bool Solver::simplifyAll()
 
     int ci, cj, li, lj;
     bool sat, false_lit;
-    unsigned int nblevels;
+    // unsigned int nblevels;
     vec<Lit> ori_c;
 
     if (0 && chanseokStrategy && permanentLearnts.size() > 0) {

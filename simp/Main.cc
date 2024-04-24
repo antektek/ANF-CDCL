@@ -164,11 +164,12 @@ int main(int argc, char** argv)
                 S.certifiedOutput =  fopen("/dev/stdout", "wb");
                 if(S.verbosity >= 1)
                     printf("c\nc Write unsat proof on stdout using text format\nc\n");
-            } else
+            } else {
                 S.certifiedOutput =  fopen(opt_certified_file, "wb");
                 const char *name = opt_certified_file;
                 if(S.verbosity >= 1)
                     printf("c\nc Write unsat proof on %s using %s format\nc\n",name,S.vbyte ? "binary" : "text");
+            }
         }
 
         solver = &S;
