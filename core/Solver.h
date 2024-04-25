@@ -473,7 +473,7 @@ protected:
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     bool     checkSolution    ();
     // void     analyze          (CRef confl, vec<Lit>& out_learnt, vec<Lit> & selectors, int& out_btlevel,unsigned int &nblevels,unsigned int &szWithoutSelectors);    // (bt = backtrack)
-    void     considerVariable (Var v);
+    void     considerLiteral  (Lit lit);
     void     analyzeConflict  (ERef confl, vec<Lit> &out_learnt, int &out_btlevel);
     void     analyzeEquation  (ERef eq, MRef prop, Lit p);
     void     learnEquation    (vec<Lit> &out_learnt);

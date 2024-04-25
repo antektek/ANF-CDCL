@@ -864,6 +864,7 @@ void Solver::cancelUntil(int level) {
 }
 
 bool Solver::checkSolution() {
+    printf("c Check the model\n");
     for (int i = 0; i < equations.size(); ++i) {
         Clause &e = ea[equations[i]];
         bool ok = e.constante();
@@ -1166,11 +1167,10 @@ void Solver::analyze(CRef confl, vec <Lit> &out_learnt, vec <Lit> &selectors, in
 }
 */
 
-void Solver::considerVariable(Var v) {
-    Lit lit = mkLit(v, assigns[v] == l_False);
+void Solver::considerLiteral(Lit lit) {
     if (!present[toInt(lit)]) {
         present[toInt(lit)] = true;
-        if (level(v) == decisionLevel()) {
+        if (level(var(lit)) == decisionLevel()) {
             ++current;
         }
     }
@@ -1178,39 +1178,36 @@ void Solver::considerVariable(Var v) {
 
 void Solver::analyzeEquation(ERef eq, MRef prop, Lit p) {
     MRef mr;
-    lbool val;
-    int idx;
+    int w1;
     // Consider each monomial in the equation
     for (int i = 0; i < ea[eq].size(); ++i) {
         mr = toInt(ea[eq][i]);
-        val = getValueMonomial(mr);
+        w1 = ma[mr].getWatch1();
         // If the monomial is falsified, we only consider the watched literal
-        if (val == l_False) {
+        if (value(ma[mr][w1]) == l_False) {
             if (mr != prop) {
-                idx = ma[mr].getWatch1();
-                considerVariable(var(ma[mr][idx]));
+                considerLiteral(~ma[mr][w1]);
             } else {
                 for (int j = 0; j < ma[mr].size(); ++j) {
-                    if (var(ma[mr][j]) != var(p)) {
-                        considerVariable(var(ma[mr][j]));
+                    if (ma[mr][j] != ~p) {
+                        considerLiteral(ma[mr][j]);
                     }
                 }
             }
-        // If the monomial is satisfied, we have to consider all the literals appaering in it
-        } else {
-            if (mr!= prop) {
-                for (int j = 0; j < ma[mr].size(); ++j) {
-                    if (value(ma[mr][j]) != l_Undef) {
-                        considerVariable(var(ma[mr][j]));
-                    }
+        // If the monomial is satisfied, we have to consider all the literals appearing in it
+        } 
+        else if (mr != prop) {
+            for (int j = 0; j < ma[mr].size(); ++j) {
+                if (value(ma[mr][j]) != l_Undef) {
+                    considerLiteral(ma[mr][j]);
                 }
             }
-        }
+        } 
     }
 }
 
 void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel) {
-    ERef prev = CRef_Undef;
+    ERef cur, prev = CRef_Undef;
     Lit p;
     current = 0;
     out_btlevel = 0;
@@ -1220,19 +1217,20 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
     // Get back in the trail and consider the reasons
     for (int i = trail.size() - 1; i >= 0 && current > 1; --i) {
         p = trail[i];
-        if (reason(var(p)) == CRef_Undef) {
+        cur = reason(var(p));
+        if (cur == CRef_Undef) {
             break;
         }
         if (present[toInt(p)]) {
             // Bump activities
             varBumpActivity(var(p));
-            if (reason(var(p)) != CRef_Undef && ea[reason(var(p))].learnt()) {
-                claBumpActivity(ea[reason(var(p))]);
+            if (cur != CRef_Undef && ea[cur].learnt()) {
+                claBumpActivity(ea[cur]);
             }
             // Do not consider the same equation several times
-            if (reason(var(p)) != prev) {
-                prev = reason(var(p));
-                analyzeEquation(prev, propagator(var(p)), p);
+            if (cur != prev) {
+                prev = cur;
+                analyzeEquation(cur, propagator(var(p)), p);
             }
             // Remove the literal
             present[toInt(p)] = false;
