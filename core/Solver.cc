@@ -515,6 +515,12 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
     for (i = j = 0, p = lit_Undef; i < ps.size(); ++i) {
         if (ps[i] != p) {
             ps[j++] = p = ps[i];
+        } else {
+            if (--j) {
+                p = ps[j - 1];
+            } else {
+                p = lit_Undef;
+            }
         }
     }
     ps.shrink(i - j);

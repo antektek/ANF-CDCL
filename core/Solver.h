@@ -530,13 +530,6 @@ protected:
     void printMonomial(MRef mr);
     void printEquation(ERef er);
 
-    // DOT graph
-    void assumingDot();
-    void propagatingDot(Lit l);
-    void conflictDot();
-    void solutionDot();
-    void backtrackDot();
-
     // Static helpers:
     //
 
