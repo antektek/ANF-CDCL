@@ -105,7 +105,7 @@ static DoubleOption opt_random_var_freq(_cat, "rnd-freq", "The frequency with wh
                                         DoubleRange(0, true, 1, true));
 static DoubleOption opt_random_seed(_cat, "rnd-seed", "Used by the random variable selection", 91648253, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption opt_ccmin_mode(_cat, "ccmin-mode", "Controls conflict clause minimization (0=none, 1=basic, 2=deep)", 2, IntRange(0, 2));
-static IntOption opt_phase_saving(_cat, "phase-saving", "Controls the level of phase saving (0=none, 1=limited, 2=full)", 2, IntRange(0, 2));
+static IntOption opt_phase_saving(_cat, "phase-saving", "Controls the level of phase saving (0=none, 1=limited, 2=full)", 0, IntRange(0, 2));
 static BoolOption opt_rnd_init_act(_cat, "rnd-init", "Randomize the initial activity", false);
 static DoubleOption opt_garbage_frac(_cat, "gc-frac", "The fraction of wasted memory allowed before a garbage collection is triggered", 0.20,
                                      DoubleRange(0, false, HUGE_VAL, false));
@@ -125,6 +125,7 @@ static BoolOption opt_forceunsat(_cat,"forceunsat","Force the phase for UNSAT",t
 static BoolOption opt_conflictAnalysis(_cat, "conflictAnalysis", "Enable conflict analysis", false);
 static BoolOption opt_cleanDB(_cat, "cleanDB", "Remove learnt equations", false);
 static BoolOption opt_VSIDS(_cat, "VSIDS", "Use VSIDS heuristics", false);
+static BoolOption opt_useLearnt(_cat, "useLearnt", "Use only the learnt clause to update variable activities", false);
 static BoolOption opt_restarts(_cat, "restarts", "Use restarts", false);
 static BoolOption opt_forget(_cat, "forget", "Do not learn", false);
 static BoolOption opt_checkModel(_cat, "checkModel", "Check if the model found is correct", false);
@@ -140,6 +141,7 @@ verbosity(0)
 , conflictAnalysis(opt_conflictAnalysis)
 , cleanDB(opt_cleanDB)
 , VSIDS(opt_VSIDS)
+, useLearnt(opt_useLearnt)
 , restarts(opt_restarts)
 , forget(opt_forget)
 , checkModel(opt_checkModel)
@@ -238,6 +240,7 @@ Solver::Solver(const Solver &s) :
 , conflictAnalysis(s.conflictAnalysis)
 , cleanDB(s.cleanDB)
 , VSIDS(s.VSIDS)
+, useLearnt(s.useLearnt)
 , restarts(s.restarts)
 , forget(s.forget)
 , checkModel(s.checkModel)
@@ -526,6 +529,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
     ps.shrink(i - j);
 
     ERef er;
+    if (ps.size() == 0 && !cst) {
+        return ok = false;
+    }
     if (ps.size() == 1) {
         const Clause &m = ma[toInt(ps[0])];
         if (!cst) {
@@ -539,7 +545,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
             references.clear();
-            propagators.clear();
+            if (conflictAnalysis) {
+                propagators.clear();
+            }
             return ok;
         }
         if (m.size() == 1) {
@@ -551,7 +559,9 @@ bool Solver::addEquation_(vec<Lit> &ps, bool &cst) {
             ok = (propagate() == CRef_Undef);
             toPropagate.clear();
             references.clear();
-            propagators.clear();
+            if (conflictAnalysis) {
+                propagators.clear();
+            }
             return ok;
         }
         er = ea.alloc(ps, false, false, cst);
@@ -855,11 +865,8 @@ void Solver::cancelUntil(int level) {
                         ea.free(er);
                     }
                 }
-                if (VSIDS) {
-                    if (phase_saving > 1 || ((phase_saving == 1) && c > trail_lim.last())) {
-                        polarity[x] = sign(trail[c]);
-                    }
-                    insertVarOrder(x);
+                if (VSIDS && phase_saving) {
+                    polarity[x] = sign(trail[c]);
                 }
             }
         }
@@ -870,7 +877,7 @@ void Solver::cancelUntil(int level) {
 }
 
 bool Solver::checkSolution() {
-    printf("c Check the model\n");
+    printf("c Check the model");
     for (int i = 0; i < equations.size(); ++i) {
         Clause &e = ea[equations[i]];
         bool ok = e.constante();
@@ -901,8 +908,8 @@ bool Solver::checkSolution() {
 // Major methods:
 
 Lit Solver::pickBranchLit() {
+    Var next = var_Undef;
     if (VSIDS) {
-        Var next = var_Undef;
         double maxi;
         for (Var v = 0; v < nVars(); ++v) {
             if (value(v) == l_Undef) {
@@ -912,17 +919,18 @@ Lit Solver::pickBranchLit() {
                 }
             }
         }
-        return next == var_Undef ? lit_Undef : mkLit(next, rnd_pol ? drand(random_seed) < 0.5 : polarity[next]);
+        if (phase_saving) {
+            return next == var_Undef ? lit_Undef : mkLit(next, rnd_pol ? drand(random_seed) < 0.5 : polarity[next]);
+        }
     } else {    
-        Var next = var_Undef;
         for (Var v = 0; v < nVars(); ++v) {
             if (value(v) == l_Undef) {
                 next = v;
                 break;
             }
         }
-        return next == var_Undef ? lit_Undef : mkLit(next, true);
     }
+    return next == var_Undef ? lit_Undef : mkLit(next, true);
 }
 
 /* Glucose heuristics
@@ -1229,8 +1237,10 @@ void Solver::analyzeConflict(ERef confl, vec<Lit> &out_learnt, int &out_btlevel)
         }
         if (present[toInt(p)]) {
             // Bump activities
-            varBumpActivity(var(p));
-            if (cur != CRef_Undef && ea[cur].learnt()) {
+            if (!useLearnt) {
+                varBumpActivity(var(p));
+            }
+            if (cur != CRef_Undef && cur != prev && ea[cur].learnt()) {
                 claBumpActivity(ea[cur]);
             }
             // Do not consider the same equation several times
@@ -1308,6 +1318,9 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
 
     // LBD
     ea[er].setLBD(lbd);
+
+    // Activity
+    claBumpActivity(ea[er]);
 }
 
 
@@ -2266,6 +2279,11 @@ lbool Solver::search(int nof_conflicts) {
                     if (learnt_clause.size() == 2) {
                         ++stats[nbBin];
                     }
+                    if (useLearnt) {
+                        for (int i = 0; i < learnt_clause.size(); ++i) {
+                            varBumpActivity(var(learnt_clause[i]));
+                        }
+                    }
                     learnEquation(learnt_clause);
                 }
                 cancelUntil(backtrack_level);
@@ -2330,7 +2348,7 @@ lbool Solver::search(int nof_conflicts) {
             }
         } else {
             if (conflictAnalysis && restarts) {
-                if (nof_conflicts >= 0 && conflictC >= nof_conflicts) {
+                if (luby_restart && conflictC >= nof_conflicts) {
                     cancelUntil(0);
                     return l_Undef;
                 }
@@ -2576,9 +2594,6 @@ lbool Solver::solve_(bool do_simp, bool turn_off_simp) // Parameters are useless
         }
         if (cleanDB) {
             cptConflicts = 0;
-        }
-        if (restarts) {
-            luby_restart = true;
         }
     }
     

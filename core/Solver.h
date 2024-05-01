@@ -219,6 +219,7 @@ public:
     bool      conflictAnalysis;
     bool      cleanDB;
     bool      VSIDS;
+    bool      useLearnt;
     bool      restarts;
     bool      forget;
     bool      checkModel;
