@@ -456,7 +456,6 @@ MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt) {
         // Create the new monomial
         mr = ma.alloc(m, learnt);
         watchedMonomials.init(mkLit(mr >> 1, false));
-        watchedMonomials.init(mkLit(mr >> 1, true));
         createdMonomials[code] = mr;
 
         // Update presence of literal
@@ -1291,7 +1290,6 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     MRef mr = ma.alloc(out_learnt, true);
     
     watchedMonomials.init(mkLit(mr >> 1, false));
-    watchedMonomials.init(mkLit(mr >> 1, true));
 
     // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
@@ -2287,6 +2285,9 @@ lbool Solver::search(int nof_conflicts) {
                     learnEquation(learnt_clause);
                 }
                 cancelUntil(backtrack_level);
+
+                varDecayActivity();
+                claDecayActivity();
             } else {
                 // Flip the last decision
                 toPropagate.push(~trail[trail_lim.last()]);
@@ -2342,10 +2343,6 @@ lbool Solver::search(int nof_conflicts) {
 
             }
             */
-            if (conflictAnalysis) { 
-                varDecayActivity();
-                claDecayActivity();
-            }
         } else {
             if (conflictAnalysis && restarts) {
                 if (luby_restart && conflictC >= nof_conflicts) {
