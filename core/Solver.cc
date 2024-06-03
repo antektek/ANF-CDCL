@@ -456,6 +456,7 @@ MRef Solver::allocateMonomial(vec<Lit> &m, bool learnt) {
         // Create the new monomial
         mr = ma.alloc(m, learnt);
         watchedMonomials.init(mkLit(mr >> 1, false));
+        watchedMonomials.init(mkLit(mr >> 1, true));
         createdMonomials[code] = mr;
 
         // Update presence of literal
@@ -734,14 +735,7 @@ void Solver::removeMonomial(MRef mr) {
     int w1 = m.getWatch1();
 
     // Remove the watched literal
-    vec<Watcher> &ws = watchedLiterals[m[w1]];
-    for (int i = 0; i < ws.size(); ++i) {
-        if (ws[i].cref == mr) {
-            ws[i] = ws.last();
-            ws.pop();
-            break;
-        }
-    }
+    removeWatched(watchedLiterals[m[w1]], mr);
 
     // Remove presence of literals
     for (int i = 0; i < m.size(); ++i) {
@@ -771,14 +765,8 @@ void Solver::removeEquation(ERef er) {
 
     removeMonomial(toInt(e[0]));
 
-    vec<Watcher> &ws = watchedMonomials[e[w1]];
-    for (int i = 0; i < ws.size(); ++i) {
-        if (ws[i].cref == er) {
-            ws[i] = ws.last();
-            ws.pop();
-            break;
-        }
-    }
+    removeWatched(watchedMonomials[e[w1]], er);
+    
     ea.free(er);
 }
 
@@ -876,7 +864,6 @@ void Solver::cancelUntil(int level) {
 }
 
 bool Solver::checkSolution() {
-    printf("c Check the model");
     for (int i = 0; i < equations.size(); ++i) {
         Clause &e = ea[equations[i]];
         bool ok = e.constante();
@@ -1290,6 +1277,7 @@ void Solver::learnEquation(vec<Lit> &out_learnt) {
     MRef mr = ma.alloc(out_learnt, true);
     
     watchedMonomials.init(mkLit(mr >> 1, false));
+    watchedMonomials.init(mkLit(mr >> 1, true));
 
     // Create the equation
     eq.push(mkLit(mr >> 1, mr & 1));
@@ -1556,20 +1544,24 @@ CRef Solver::propagate() {
 }
 */
 
+void Solver::removeWatched(vec<Watcher> &ws, MRef mr) {
+    for (int i = 0; i < ws.size(); ++i) {
+        if (ws[i].cref == mr) {
+            ws[i] = ws.last();
+            ws.pop();
+            break;
+        }
+    }
+}
+
 
 void Solver::forceWatchedLiteral(MRef mr, Lit lit, int idx) {
     Clause &m = ma[mr];
+    int w1 = m.getWatch1();
     // Change only if we do not already watch a falsified literal
     if (value(m[m.getWatch1()]) == l_Undef) {
         // Remove mr from the list of the previous watched literal
-        vec<Watcher> &ws = watchedLiterals[m[m.getWatch1()]];
-        for (int i = 0; i < ws.size(); ++i) {
-            if (ws[i].cref == mr) {
-                ws[i] = ws.last();
-                ws.pop();
-                break;
-            }
-        }
+        removeWatched(watchedLiterals[m[w1]], mr);
         // Update the new watched literal
         watchedLiterals[~lit].push(Watcher(mr, ~lit));
         m.setWatch1(idx);
@@ -1585,14 +1577,7 @@ void Solver::checkMonomialToFalsify(MRef mr, ERef er) {
                 if (value(m[w]) == l_Undef) {
                     return;
                 } else {
-                    vec<Watcher> &ws = watchedLiterals[m[w]];
-                    for (int j = 0; j < ws.size(); ++j) {
-                        if (ws[j].cref == mr) {
-                            ws[j] = ws.last();
-                            ws.pop();
-                            break;
-                        }
-                    } 
+                    removeWatched(watchedLiterals[m[w]], mr);
                     watchedLiterals[m[i]].push(Watcher(mr, m[i]));
                     m.setWatch1(i);
                     w = i;
@@ -1771,6 +1756,7 @@ ERef Solver::propagate() {
             uncheckedEnqueue(p);
         }
         ++propagations;
+        affected.clear();
         
         // Check monomials to falsify
         vec<pair<MRef, CRef>> &check = toFalsify[toInt(p)];
@@ -1780,22 +1766,14 @@ ERef Solver::propagate() {
         
         // Force falsified literals
         vec<pair<MRef, int>> &negated = presenceLiterals[toInt(~p)];
-        affected.clear();
         for (i = 0; i < negated.size(); ++i) {
             mr = negated[i].first;
             forceWatchedLiteral(mr, p, negated[i].second);
             affected.push(mr);
         }
-
-        // Update falsified monomials
-        confl = updateAffectedMonomials();
-        if (confl != CRef_Undef) {
-            return confl;
-        }
         
         // Update satisfied watched literals
         vec<Watcher> &wl = watchedLiterals[p];
-        affected.clear();
         for (i = j = 0; i < wl.size(); ++i) {
             mr = wl[i].cref;
             // If the monomial is affected, we have to propagate it
@@ -1806,7 +1784,7 @@ ERef Solver::propagate() {
         }
         wl.shrink(i - j);
 
-        // Update satisfied monomials
+        // Update affected monomials
         confl = updateAffectedMonomials();
         if (confl != CRef_Undef) {
             return confl;

@@ -465,6 +465,7 @@ protected:
     bool     enqueue          (Lit p, CRef from = CRef_Undef);                         // Test if fact 'p' contradicts current state, enqueue otherwise.
     ERef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
     CRef     propagateUnaryWatches(Lit p);                                                  // Perform propagation on unary watches of p, can find only conflicts
+    void     removeWatched(vec<Watcher> &ws, MRef mr);
     void     forceWatchedLiteral(MRef mr, Lit lit, int idx);
     bool     updateWatchedLiteral(MRef mr, Lit lit);
     void     checkMonomialToFalsify(MRef mr, ERef er);
