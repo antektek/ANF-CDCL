@@ -83,7 +83,7 @@ static void parse_DIMACS_main(B& in, Solver& S) {
         skipWhitespace(in);
         if (*in == EOF) break;
         else if (*in == 'p'){
-            if (eagerMatch(in, "p anf")){
+            if (eagerMatch(in, "p cnf")){
                 vars    = parseInt(in);
                 equations = parseInt(in);
                 // SATRACE'06 hack

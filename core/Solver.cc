@@ -129,6 +129,8 @@ static BoolOption opt_useLearnt(_cat, "useLearnt", "Use only the learnt clause t
 static BoolOption opt_restarts(_cat, "restarts", "Use restarts", false);
 static BoolOption opt_forget(_cat, "forget", "Do not learn", false);
 static BoolOption opt_checkModel(_cat, "checkModel", "Check if the model found is correct", false);
+static BoolOption opt_breakSymetries(_cat, "breakSymetries", "Break symetries in Ic_S4 instances", false);
+static IntOption opt_l(_cat, "l", "value for symetries", 3, IntRange(1, INT32_MAX));
 //=================================================================================================
 // Constructor/Destructor:
 
@@ -145,6 +147,8 @@ verbosity(0)
 , restarts(opt_restarts)
 , forget(opt_forget)
 , checkModel(opt_checkModel)
+, breakSymetries(opt_breakSymetries)
+, _l(opt_l)
 , K(opt_K)
 , R(opt_R)
 , sizeLBDQueue(opt_size_lbd_queue)
@@ -244,6 +248,8 @@ Solver::Solver(const Solver &s) :
 , restarts(s.restarts)
 , forget(s.forget)
 , checkModel(s.checkModel)
+, breakSymetries(s.breakSymetries)
+, _l(s._l)
 , K(s.K)
 , R(s.R)
 , sizeLBDQueue(s.sizeLBDQueue)
@@ -860,10 +866,12 @@ void Solver::cancelUntil(int level) {
         qhead = trail_lim[level];
         trail.shrink(trail.size() - trail_lim[level]);
         trail_lim.shrink(trail_lim.size() - level);
+        compare = false;
     }
 }
 
 bool Solver::checkSolution() {
+    printf("c Check the solution\n");
     for (int i = 0; i < equations.size(); ++i) {
         Clause &e = ea[equations[i]];
         bool ok = e.constante();
@@ -2422,8 +2430,20 @@ lbool Solver::search(int nof_conflicts) {
 
             // Increase decision level and enqueue 'next'
             aDecisionWasMade = true;
-            newDecisionLevel();
-            toPropagate.push(next);
+            if (breakSymetries) {
+                if (var(next) % _l == 0) {
+                    compare = true;
+                }
+                if (var(next) < _l || !compare || value(var(next) - _l) == l_False) {
+                    newDecisionLevel();
+                    toPropagate.push(next);
+                } else {
+                    toPropagate.push(~next);
+                }
+            } else {
+                newDecisionLevel();
+                toPropagate.push(next);
+            }
             references.push(CRef_Undef);
             if (conflictAnalysis) {
                 propagators.push(CRef_Undef);

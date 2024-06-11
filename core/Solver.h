@@ -223,6 +223,8 @@ public:
     bool      restarts;
     bool      forget;
     bool      checkModel;
+    bool      breakSymetries;
+    int       _l;
 
     // Constants For restarts
     double    K;
@@ -389,6 +391,7 @@ protected:
     bool                isUnit;
     int                 cptConflicts;
     int                 lbd;
+    bool                compare;
 
     vec<lbool>          assigns;          // The current assignments.
     vec<char>           polarity;         // The preferred polarity of each variable.
